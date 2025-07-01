@@ -19,7 +19,8 @@ Available GLASS Products:
 - Land Surface Temperature (LST)
 - Normalized Difference Vegetation Index (NDVI)
 - Enhanced Vegetation Index (EVI)
-- Gross Primary Production (GPP)
+- Gross Primary Production (GPP) - 8-day
+- Gross Primary Production (GPP_YEARLY) - yearly
 - Net Primary Production (NPP)
 - Evapotranspiration (ET)
 - Snow Cover Extent
@@ -116,6 +117,16 @@ def get_glass_product_info():
             'colormap': 'YlGn',
             'tile_based': True
         },
+        'GPP_YEARLY': {
+            'name': 'Gross Primary Production (Yearly)',
+            'units': 'gC/m²/year',
+            'resolution': '500m',
+            'temporal_resolution': 'yearly',
+            'time_range': '2000-2022',
+            'url_pattern': 'https://www.glass.hku.hk/archive/GPP/MODIS/500M/GLASS_GPP_500M_YEARLY_V60/{year}/001/',
+            'colormap': 'YlGn',
+            'tile_based': True
+        },
         'NPP': {
             'name': 'Net Primary Production',
             'units': 'gC/m�/day',
@@ -154,7 +165,7 @@ def generate_day_of_year_list(start_year, end_year, temporal_resolution='8-day')
     Args:
         start_year (int): Starting year
         end_year (int): Ending year
-        temporal_resolution (str): Temporal resolution ('8-day', 'daily', 'monthly')
+        temporal_resolution (str): Temporal resolution ('8-day', 'daily', 'monthly', 'yearly')
     
     Returns:
         list: List of (year, doy) tuples
@@ -178,6 +189,10 @@ def generate_day_of_year_list(start_year, end_year, temporal_resolution='8-day')
         for year in range(start_year, end_year + 1):
             for doy in monthly_doys:
                 dates.append((year, f"{doy:03d}"))
+    elif temporal_resolution == 'yearly':
+        # Yearly data - one file per year (uses DOY 001 for entire year)
+        for year in range(start_year, end_year + 1):
+            dates.append((year, "001"))  # DOY 001 represents the entire year
     
     return dates
 
@@ -1096,20 +1111,6 @@ def save_glass_point_data_csv(points_data, output_dir):
             output_file = output_dir / f"{product}_all_points.csv"
             df.to_csv(output_file, index=False)
             print(f"Saved: {output_file} ({len(df)} records)")
-
-
-def save_glass_point_data_json(points_data, output_dir):
-    """
-    Save GLASS point data to JSON file.
-    
-    Args:
-        points_data (dict): Extracted point data
-        output_dir (Path): Output directory
-    """
-    output_file = output_dir / "glass_point_data.json"
-    with open(output_file, 'w') as f:
-        json.dump(points_data, f, indent=2)
-    print(f"Saved: {output_file}")
 
 
 def parse_coordinates(coord_list, coords_file):
