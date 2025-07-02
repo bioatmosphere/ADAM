@@ -7,13 +7,20 @@ net primary productivity (BNPP) using environmental predictors from the TAM fram
 Key functions:
 - train_random_forest: Train RF model on integrated dataset
 - apply_global_rf: Apply trained model for global predictions
-- evaluate_model: Comprehensive model evaluation
+- evaluate_model: Comprehensive model evaluation with saved visualizations
 
 Data sources integrated:
 - ForC global forest carbon database
 - GherardiSala grassland productivity data  
-- TerraClimate environmental variables
+- TerraClimate environmental variables (aet, pet, ppt, tmax, tmin, vpd)
+- GLASS satellite data (yearly GPP)
 - SoilGrids soil properties
+
+Model outputs:
+- Trained model file (rf_model.pkl)
+- Feature importance plot (feature_importance.png)
+- Predictions scatter plot (predictions_plot.png)
+- Model summary text file (model_summary.txt)
 
 Author: TAM Development Team
 """
@@ -60,15 +67,19 @@ def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_d
     print(f"Loading integrated data from: {data_path}")
     df = pd.read_csv(data_path)
     
-    # Validate required columns
+    # Validate required columns (case-insensitive)
     required_cols = ['bnpp', 'lat', 'lon']  # Minimum required columns
-    missing_cols = [col for col in required_cols if col not in df.columns]
+    df_cols_lower = [col.lower() for col in df.columns]
+    missing_cols = [col for col in required_cols if col not in df_cols_lower]
     
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
     
     print(f"Loaded {len(df)} records with {len(df.columns)} features")
-    print(f"Target variable (BNPP) range: {df['bnpp'].min():.2f} to {df['bnpp'].max():.2f}")
+    # Find the BNPP column (case-insensitive)
+    bnpp_col = next((col for col in df.columns if col.lower() == 'bnpp'), None)
+    if bnpp_col:
+        print(f"Target variable ({bnpp_col}) range: {df[bnpp_col].min():.2f} to {df[bnpp_col].max():.2f}")
     
     return df
 
@@ -84,8 +95,8 @@ def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple
     Returns:
         Tuple of (features DataFrame, target Series)
     """
-    # Remove non-predictive columns
-    exclude_cols = [target_col, 'site_id', 'study_id', 'measurement_id'] 
+    # Remove non-predictive columns (including lat/lon to avoid spatial overfitting)
+    exclude_cols = [target_col, 'site_id', 'study_id', 'measurement_id', 'lat', 'lon'] 
     feature_cols = [col for col in df.columns if col not in exclude_cols]
     
     # Handle missing values
@@ -96,6 +107,12 @@ def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple
     valid_idx = ~y.isna()
     X = X[valid_idx]
     y = y[valid_idx]
+    
+    # Remove categorical variables (keep only numeric features)
+    categorical_cols = X.select_dtypes(include=['object']).columns
+    if len(categorical_cols) > 0:
+        print(f"Excluding categorical variables: {list(categorical_cols)}")
+        X = X.select_dtypes(exclude=['object'])
     
     # Fill missing features with median values
     X = X.fillna(X.median())
@@ -242,7 +259,7 @@ def evaluate_model(
     return metrics
 
 
-def plot_feature_importance(model: RandomForestRegressor, feature_names: list, top_n: int = 15):
+def plot_feature_importance(model: RandomForestRegressor, feature_names: list, top_n: int = 15, save_path: str = "../models/feature_importance.png"):
     """Plot feature importances from trained Random Forest model."""
     importances = model.feature_importances_
     feature_importance_df = pd.DataFrame({
@@ -260,30 +277,42 @@ def plot_feature_importance(model: RandomForestRegressor, feature_names: list, t
     plt.title(f'Top {top_n} Feature Importances - Random Forest Model')
     plt.xlabel('Importance')
     plt.tight_layout()
-    plt.show()
+    
+    # Save the plot
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"Feature importance plot saved to: {save_path}")
+    plt.close()
     
     print(f"\nTop {top_n} most important features:")
     for _, row in feature_importance_df.head(top_n).iterrows():
         print(f"{row['feature']}: {row['importance']:.4f}")
 
 
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float):
+def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/predictions_plot.png"):
     """Plot actual vs predicted values with perfect prediction line."""
     plt.figure(figsize=(10, 8))
-    plt.scatter(y_true, y_pred, alpha=0.6, s=50)
+    plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
     
     # Perfect prediction line
     min_val = min(y_true.min(), y_pred.min())
     max_val = max(y_true.max(), y_pred.max())
     plt.plot([min_val, max_val], [min_val, max_val], '--r', linewidth=2, label='Perfect Prediction')
     
-    plt.xlabel('Actual BNPP')
-    plt.ylabel('Predicted BNPP')
+    plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
+    plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
     plt.title(f'Actual vs Predicted BNPP (R² = {r2:.4f})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+    
+    # Save the plot
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"Predictions plot saved to: {save_path}")
+    plt.close()
 
 
 def save_model(model: RandomForestRegressor, metrics: Dict, output_path: str = "../models/rf_model.pkl"):
@@ -294,13 +323,41 @@ def save_model(model: RandomForestRegressor, metrics: Dict, output_path: str = "
     model_data = {
         'model': model,
         'metrics': metrics,
-        'feature_names': list(model.feature_names_in_) if hasattr(model, 'feature_names_in_') else None
+        'feature_names': list(model.feature_names_in_) if hasattr(model, 'feature_names_in_') else None,
+        'feature_importances': model.feature_importances_ if hasattr(model, 'feature_importances_') else None
     }
     
     with open(output_path, 'wb') as f:
         pickle.dump(model_data, f)
     
     print(f"Model saved to: {output_path}")
+    
+    # Save model summary as text file
+    summary_path = output_path.parent / "model_summary.txt"
+    with open(summary_path, 'w') as f:
+        f.write("Random Forest Model Summary\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Model Performance:\n")
+        f.write(f"Training R²: {metrics['train_r2']:.4f}\n")
+        f.write(f"Test R²: {metrics['test_r2']:.4f}\n")
+        f.write(f"Training RMSE: {metrics['train_rmse']:.4f}\n")
+        f.write(f"Test RMSE: {metrics['test_rmse']:.4f}\n")
+        f.write(f"Training MAE: {metrics['train_mae']:.4f}\n")
+        f.write(f"Test MAE: {metrics['test_mae']:.4f}\n\n")
+        
+        f.write(f"Dataset Information:\n")
+        f.write(f"Number of features: {metrics['n_features']}\n")
+        f.write(f"Training samples: {metrics['n_train']}\n")
+        f.write(f"Test samples: {metrics['n_test']}\n\n")
+        
+        if model_data['feature_names'] and model_data['feature_importances'] is not None:
+            f.write(f"Feature Importances:\n")
+            feature_imp = list(zip(model_data['feature_names'], model_data['feature_importances']))
+            feature_imp.sort(key=lambda x: x[1], reverse=True)
+            for feature, importance in feature_imp:
+                f.write(f"{feature}: {importance:.4f}\n")
+    
+    print(f"Model summary saved to: {summary_path}")
 
 
 def apply_global_rf(model: RandomForestRegressor, global_features: pd.DataFrame) -> np.ndarray:

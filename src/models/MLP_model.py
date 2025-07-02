@@ -64,7 +64,6 @@ class BP_MLP(nn.Module):
         
         for i, hidden_size in enumerate(hidden_sizes):
             layers.append(nn.Linear(in_size, hidden_size))
-            layers.append(nn.BatchNorm1d(hidden_size))
             layers.append(nn.ReLU())
             if i < len(hidden_sizes) - 1:  # Don't add dropout before output layer
                 layers.append(nn.Dropout(dropout_rate))
@@ -128,24 +127,24 @@ def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple
     Returns:
         Tuple of (features DataFrame, target Series)
     """
-    # Remove non-predictive columns - keeping environmental predictors
-    exclude_cols = [target_col, 'lat', 'lon']  # Remove coordinates for now
+    # Remove non-predictive columns (including lat/lon to avoid spatial overfitting)
+    exclude_cols = [target_col, 'site_id', 'study_id', 'measurement_id', 'lat', 'lon'] 
     feature_cols = [col for col in df.columns if col not in exclude_cols]
     
-    # Handle categorical variables (e.g., biome)
+    # Handle missing values
     X = df[feature_cols].copy()
     y = df[target_col].copy()
-    
-    # Convert categorical variables to dummy variables
-    categorical_cols = X.select_dtypes(include=['object']).columns
-    if len(categorical_cols) > 0:
-        print(f"Converting categorical variables: {list(categorical_cols)}")
-        X = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
     
     # Remove rows with missing target values
     valid_idx = ~y.isna()
     X = X[valid_idx]
     y = y[valid_idx]
+    
+    # Remove categorical variables (keep only numeric features)
+    categorical_cols = X.select_dtypes(include=['object']).columns
+    if len(categorical_cols) > 0:
+        print(f"Excluding categorical variables: {list(categorical_cols)}")
+        X = X.select_dtypes(exclude=['object'])
     
     # Fill missing features with median values
     X = X.fillna(X.median())
@@ -343,7 +342,7 @@ def evaluate_model(
     return metrics
 
 
-def plot_training_curves(train_losses, test_losses):
+def plot_training_curves(train_losses, test_losses, save_path: str = "../models/training_curves.png"):
     """Plot training and validation loss curves."""
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_losses) + 1)
@@ -355,26 +354,38 @@ def plot_training_curves(train_losses, test_losses):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+    
+    # Save the plot
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"Training curves plot saved to: {save_path}")
+    plt.close()
 
 
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float):
+def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/mlp_predictions_plot.png"):
     """Plot actual vs predicted values with perfect prediction line."""
     plt.figure(figsize=(10, 8))
-    plt.scatter(y_true, y_pred, alpha=0.6, s=50)
+    plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
     
     # Perfect prediction line
     min_val = min(y_true.min(), y_pred.min())
     max_val = max(y_true.max(), y_pred.max())
     plt.plot([min_val, max_val], [min_val, max_val], '--r', linewidth=2, label='Perfect Prediction')
     
-    plt.xlabel('Actual BNPP')
-    plt.ylabel('Predicted BNPP')
+    plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
+    plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
     plt.title(f'Actual vs Predicted BNPP - MLP Model (R² = {r2:.4f})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+    
+    # Save the plot
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"MLP predictions plot saved to: {save_path}")
+    plt.close()
 
 
 def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path: str = "../models/mlp_model.pkl"):
@@ -398,6 +409,33 @@ def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path
         pickle.dump(model_data, f)
     
     print(f"Model saved to: {output_path}")
+    
+    # Save model summary as text file
+    summary_path = output_path.parent / "mlp_model_summary.txt"
+    with open(summary_path, 'w') as f:
+        f.write("Multi-Layer Perceptron (MLP) Model Summary\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Model Performance:\n")
+        f.write(f"Training R²: {metrics['train_r2']:.4f}\n")
+        f.write(f"Test R²: {metrics['test_r2']:.4f}\n")
+        f.write(f"Training RMSE: {metrics['train_rmse']:.4f}\n")
+        f.write(f"Test RMSE: {metrics['test_rmse']:.4f}\n")
+        f.write(f"Training MAE: {metrics['train_mae']:.4f}\n")
+        f.write(f"Test MAE: {metrics['test_mae']:.4f}\n\n")
+        
+        f.write(f"Dataset Information:\n")
+        f.write(f"Number of features: {metrics['n_features']}\n")
+        f.write(f"Training samples: {metrics['n_train']}\n")
+        f.write(f"Test samples: {metrics['n_test']}\n\n")
+        
+        f.write(f"Model Architecture:\n")
+        arch = model_data['model_architecture']
+        f.write(f"Input features: {arch['input_size']}\n")
+        f.write(f"Hidden layers: {arch['hidden_sizes']}\n")
+        f.write(f"Output size: {arch['output_size']}\n")
+        f.write(f"Dropout rate: {arch['dropout_rate']}\n")
+    
+    print(f"MLP model summary saved to: {summary_path}")
 
 
 def load_model(model_path: str = "../models/mlp_model.pkl") -> Tuple[BP_MLP, StandardScaler, Dict]:
