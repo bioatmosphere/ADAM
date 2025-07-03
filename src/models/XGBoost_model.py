@@ -1,12 +1,12 @@
 """
-A Belowground Productivity (BP) Random Forest model for the ELM-TAM benchmark pipeline.
+A Belowground Productivity (BP) XGBoost model for the ELM-TAM benchmark pipeline.
 
-This module provides Random Forest regression functionality for predicting belowground 
+This module provides XGBoost regression functionality for predicting belowground 
 net primary productivity (BNPP) using environmental predictors from the TAM framework.
 
 Key functions:
-- train_random_forest: Train RF model on integrated dataset
-- apply_global_rf: Apply trained model for global predictions
+- train_xgboost: Train XGBoost model on integrated dataset
+- apply_global_xgb: Apply trained model for global predictions
 - evaluate_model: Comprehensive model evaluation with saved visualizations
 
 Data sources integrated:
@@ -17,10 +17,10 @@ Data sources integrated:
 - SoilGrids soil properties
 
 Model outputs:
-- Trained model file (rf_model.pkl)
-- Feature importance plot (feature_importance.png)
-- Predictions scatter plot (predictions_plot.png)
-- Model summary text file (model_summary.txt)
+- Trained model file (xgb_model.pkl)
+- Feature importance plot (xgb_feature_importance.png)
+- Predictions scatter plot (xgb_predictions_plot.png)
+- Model summary text file (xgb_model_summary.txt)
 
 Author: TAM Development Team
 """
@@ -34,8 +34,8 @@ import pickle
 import warnings
 from typing import Tuple, Dict
 
+import xgboost as xgb
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
 # Suppress warnings for cleaner output
@@ -123,16 +123,16 @@ def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple
     return X, y
 
 
-def train_random_forest(
+def train_xgboost(
     X: pd.DataFrame, 
     y: pd.Series,
     test_size: float = 0.2,
     random_state: int = 42,
     tune_hyperparameters: bool = True,
     cv_folds: int = 5
-) -> Tuple[RandomForestRegressor, Dict[str, float]]:
+) -> Tuple[xgb.XGBRegressor, Dict[str, float]]:
     """
-    Train Random Forest model with optional hyperparameter tuning.
+    Train XGBoost model with optional hyperparameter tuning.
     
     Args:
         X: Feature matrix
@@ -159,15 +159,15 @@ def train_random_forest(
         # Define parameter grid
         param_grid = {
             'n_estimators': [100, 200, 300],
-            'max_depth': [10, 20, None],
-            'min_samples_split': [2, 5, 10],
-            'min_samples_leaf': [1, 2, 4],
-            'max_features': ['sqrt', 'log2', None]
+            'max_depth': [3, 6, 9],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'subsample': [0.8, 0.9, 1.0],
+            'colsample_bytree': [0.8, 0.9, 1.0]
         }
         
         # Grid search with cross-validation
-        rf_grid = GridSearchCV(
-            RandomForestRegressor(random_state=random_state),
+        xgb_grid = GridSearchCV(
+            xgb.XGBRegressor(random_state=random_state, verbosity=0),
             param_grid,
             cv=cv_folds,
             scoring='r2',
@@ -175,35 +175,35 @@ def train_random_forest(
             verbose=1
         )
         
-        rf_grid.fit(X_train, y_train)
-        rf_model = rf_grid.best_estimator_
+        xgb_grid.fit(X_train, y_train)
+        xgb_model = xgb_grid.best_estimator_
         
-        print(f"Best parameters: {rf_grid.best_params_}")
-        print(f"Best CV score: {rf_grid.best_score_:.4f}")
+        print(f"Best parameters: {xgb_grid.best_params_}")
+        print(f"Best CV score: {xgb_grid.best_score_:.4f}")
         
     else:
         # Use default parameters with some optimization
-        rf_model = RandomForestRegressor(
+        xgb_model = xgb.XGBRegressor(
             n_estimators=200,
-            max_depth=20,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            max_features='sqrt',
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.9,
+            colsample_bytree=0.9,
             random_state=random_state,
-            n_jobs=-1
+            verbosity=0
         )
         
-        print("Training Random Forest with default parameters...")
-        rf_model.fit(X_train, y_train)
+        print("Training XGBoost with default parameters...")
+        xgb_model.fit(X_train, y_train)
     
     # Evaluate model
-    metrics = evaluate_model(rf_model, X_train, X_test, y_train, y_test, X.columns)
+    metrics = evaluate_model(xgb_model, X_train, X_test, y_train, y_test, X.columns)
     
-    return rf_model, metrics
+    return xgb_model, metrics
 
 
 def evaluate_model(
-    model: RandomForestRegressor,
+    model: xgb.XGBRegressor,
     X_train: pd.DataFrame,
     X_test: pd.DataFrame, 
     y_train: pd.Series,
@@ -214,7 +214,7 @@ def evaluate_model(
     Comprehensive model evaluation with metrics and visualizations.
     
     Args:
-        model: Trained Random Forest model
+        model: Trained XGBoost model
         X_train, X_test: Training and test feature sets
         y_train, y_test: Training and test target values
         feature_names: List of feature names
@@ -241,7 +241,7 @@ def evaluate_model(
     
     # Print results
     print(f"\n{'='*50}")
-    print("MODEL PERFORMANCE METRICS")
+    print("XGBOOST MODEL PERFORMANCE METRICS")
     print(f"{'='*50}")
     print(f"Training R²: {metrics['train_r2']:.4f}")
     print(f"Test R²: {metrics['test_r2']:.4f}")
@@ -259,8 +259,8 @@ def evaluate_model(
     return metrics
 
 
-def plot_feature_importance(model: RandomForestRegressor, feature_names: list, top_n: int = 15, save_path: str = "../models/feature_importance.png"):
-    """Plot feature importances from trained Random Forest model."""
+def plot_feature_importance(model: xgb.XGBRegressor, feature_names: list, top_n: int = 15, save_path: str = "../models/xgb_feature_importance.png"):
+    """Plot feature importances from trained XGBoost model."""
     importances = model.feature_importances_
     feature_importance_df = pd.DataFrame({
         'feature': feature_names,
@@ -274,7 +274,7 @@ def plot_feature_importance(model: RandomForestRegressor, feature_names: list, t
         y='feature',
         palette='viridis'
     )
-    plt.title(f'Top {top_n} Feature Importances - Random Forest Model')
+    plt.title(f'Top {top_n} Feature Importances - XGBoost Model')
     plt.xlabel('Importance')
     plt.tight_layout()
     
@@ -282,7 +282,7 @@ def plot_feature_importance(model: RandomForestRegressor, feature_names: list, t
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Feature importance plot saved to: {save_path}")
+    print(f"XGBoost feature importance plot saved to: {save_path}")
     plt.close()
     
     print(f"\nTop {top_n} most important features:")
@@ -290,7 +290,7 @@ def plot_feature_importance(model: RandomForestRegressor, feature_names: list, t
         print(f"{row['feature']}: {row['importance']:.4f}")
 
 
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/predictions_plot.png"):
+def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/xgb_predictions_plot.png"):
     """Plot actual vs predicted values with perfect prediction line."""
     plt.figure(figsize=(10, 8))
     plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
@@ -302,7 +302,7 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     
     plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
     plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
-    plt.title(f'Actual vs Predicted BNPP (R² = {r2:.4f})')
+    plt.title(f'Actual vs Predicted BNPP - XGBoost Model (R² = {r2:.4f})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -311,11 +311,11 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Predictions plot saved to: {save_path}")
+    print(f"XGBoost predictions plot saved to: {save_path}")
     plt.close()
 
 
-def save_model(model: RandomForestRegressor, metrics: Dict, output_path: str = "../models/rf_model.pkl"):
+def save_model(model: xgb.XGBRegressor, metrics: Dict, output_path: str = "../models/xgb_model.pkl"):
     """Save trained model and metrics to disk."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,9 +333,9 @@ def save_model(model: RandomForestRegressor, metrics: Dict, output_path: str = "
     print(f"Model saved to: {output_path}")
     
     # Save model summary as text file
-    summary_path = output_path.parent / "model_summary.txt"
+    summary_path = output_path.parent / "xgb_model_summary.txt"
     with open(summary_path, 'w') as f:
-        f.write("Random Forest Model Summary\n")
+        f.write("XGBoost Model Summary\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Model Performance:\n")
         f.write(f"Training R²: {metrics['train_r2']:.4f}\n")
@@ -357,13 +357,14 @@ def save_model(model: RandomForestRegressor, metrics: Dict, output_path: str = "
             for feature, importance in feature_imp:
                 f.write(f"{feature}: {importance:.4f}\n")
     
-    print(f"Model summary saved to: {summary_path}")
+    print(f"XGBoost model summary saved to: {summary_path}")
+
 
 
 
 def main():
     """
-    Main function for standalone execution of RF model training.
+    Main function for standalone execution of XGBoost model training.
     Loads data, trains model, and evaluates performance.
     """
     try:
@@ -374,15 +375,15 @@ def main():
         X, y = prepare_features_target(df)
         
         # Train model
-        model, metrics = train_random_forest(X, y, tune_hyperparameters=False)
+        model, metrics = train_xgboost(X, y, tune_hyperparameters=False)
         
         # Save model
         save_model(model, metrics)
         
-        print("\nRandom Forest training completed successfully!")
+        print("\nXGBoost training completed successfully!")
         
     except Exception as e:
-        print(f"Error in RF model training: {e}")
+        print(f"Error in XGBoost model training: {e}")
         return False
     
     return True

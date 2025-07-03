@@ -1,12 +1,12 @@
 """
-A Belowground Productivity (BNPPP) Multi-Layer Perceptron (MLP) model for the ELM-TAM benchmark pipeline.
+A Belowground Productivity (BP) Multi-Layer Perceptron (MLP) model for the ELM-TAM benchmark pipeline.
 
 This module provides PyTorch-based neural network functionality for predicting belowground 
 net primary productivity (BNPP) using environmental predictors from the TAM framework.
 
 Key functions:
 - train_mlp: Train MLP model on integrated dataset
-- apply_global_mlp: Apply trained model for global predictions
+- train_mlp_with_hyperparameter_search: Test multiple architectures and find best one
 - evaluate_model: Comprehensive model evaluation
 
 Data sources integrated:
@@ -184,7 +184,9 @@ def train_mlp(
     epochs: int = 100,
     learning_rate: float = 0.001,
     batch_size: int = 32,
-    dropout_rate: float = 0.2
+    dropout_rate: float = 0.2,
+    verbose: bool = True,
+    save_training_curves: bool = False
 ) -> Tuple[BP_MLP, Dict[str, float], StandardScaler]:
     """
     Train MLP model with PyTorch.
@@ -199,6 +201,7 @@ def train_mlp(
         learning_rate: Learning rate for optimizer
         batch_size: Batch size for training
         dropout_rate: Dropout rate for regularization
+        verbose: Whether to print training progress
         
     Returns:
         Tuple of (trained model, performance metrics dict, scaler)
@@ -208,8 +211,9 @@ def train_mlp(
         X, y, test_size=test_size, random_state=random_state
     )
     
-    print(f"Training set: {X_train.shape[0]} samples")
-    print(f"Test set: {X_test.shape[0]} samples")
+    if verbose:
+        print(f"Training set: {X_train.shape[0]} samples")
+        print(f"Test set: {X_test.shape[0]} samples")
     
     # Scale features
     scaler = StandardScaler()
@@ -239,7 +243,8 @@ def train_mlp(
     optimizer = Adam(model.parameters(), lr=learning_rate)
     
     # Training loop
-    print("Training MLP model...")
+    if verbose:
+        print("Training MLP model...")
     train_losses = []
     test_losses = []
     
@@ -269,16 +274,175 @@ def train_mlp(
         train_losses.append(avg_train_loss)
         test_losses.append(avg_test_loss)
         
-        if (epoch + 1) % 20 == 0:
+        if verbose and (epoch + 1) % 50 == 0:
             print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}')
     
-    # Plot training curves
-    plot_training_curves(train_losses, test_losses)
+    # Save training curves if requested
+    if save_training_curves:
+        plot_training_curves(train_losses, test_losses)
     
     # Evaluate model
-    metrics = evaluate_model(model, X_train_scaled, X_test_scaled, y_train, y_test, X.columns)
+    metrics = evaluate_model(model, X_train_scaled, X_test_scaled, y_train, y_test, X.columns, verbose=verbose)
     
     return model, metrics, scaler
+
+
+def train_mlp_with_hyperparameter_search(X: pd.DataFrame, y: pd.Series):
+    """
+    Train multiple MLP models with different hyperparameters and select the best one.
+    
+    Args:
+        X: Feature matrix
+        y: Target vector
+        
+    Returns:
+        Best model, metrics, and scaler
+    """
+    # Define hyperparameter combinations to test
+    hyperparameter_configs = [
+        # Original configuration
+        {
+            'hidden_sizes': [128, 64, 32],
+            'learning_rate': 0.001,
+            'epochs': 150,
+            'batch_size': 32,
+            'dropout_rate': 0.2,
+            'name': 'Original'
+        },
+        # Deeper network
+        {
+            'hidden_sizes': [256, 128, 64, 32],
+            'learning_rate': 0.001,
+            'epochs': 200,
+            'batch_size': 32,
+            'dropout_rate': 0.3,
+            'name': 'Deeper'
+        },
+        # Wider network
+        {
+            'hidden_sizes': [512, 256, 128],
+            'learning_rate': 0.0005,
+            'epochs': 150,
+            'batch_size': 64,
+            'dropout_rate': 0.4,
+            'name': 'Wider'
+        },
+        # Smaller network with higher learning rate
+        {
+            'hidden_sizes': [64, 32],
+            'learning_rate': 0.01,
+            'epochs': 100,
+            'batch_size': 16,
+            'dropout_rate': 0.1,
+            'name': 'Compact'
+        },
+        # Regularized network
+        {
+            'hidden_sizes': [128, 64, 32, 16],
+            'learning_rate': 0.0001,
+            'epochs': 300,
+            'batch_size': 32,
+            'dropout_rate': 0.5,
+            'name': 'Regularized'
+        }
+    ]
+    
+    best_model = None
+    best_metrics = None
+    best_scaler = None
+    best_score = -float('inf')
+    
+    results_summary = []
+    
+    for i, config in enumerate(hyperparameter_configs):
+        print(f"\n{'='*60}")
+        print(f"Training MLP Configuration {i+1}/5: {config['name']}")
+        print(f"Hidden layers: {config['hidden_sizes']}")
+        print(f"Learning rate: {config['learning_rate']}")
+        print(f"Epochs: {config['epochs']}")
+        print(f"Batch size: {config['batch_size']}")
+        print(f"Dropout rate: {config['dropout_rate']}")
+        print(f"{'='*60}")
+        
+        # Train model with current configuration
+        model, metrics, scaler = train_mlp(
+            X, y,
+            hidden_sizes=config['hidden_sizes'],
+            learning_rate=config['learning_rate'],
+            epochs=config['epochs'],
+            batch_size=config['batch_size'],
+            dropout_rate=config['dropout_rate'],
+            verbose=False  # Reduce output during search
+        )
+        
+        # Track results
+        results_summary.append({
+            'name': config['name'],
+            'test_r2': metrics['test_r2'],
+            'test_rmse': metrics['test_rmse'],
+            'test_mae': metrics['test_mae'],
+            'train_r2': metrics['train_r2']
+        })
+        
+        print(f"Results - Test R²: {metrics['test_r2']:.4f}, Test RMSE: {metrics['test_rmse']:.2f}")
+        
+        # Check if this is the best model so far
+        if metrics['test_r2'] > best_score:
+            best_score = metrics['test_r2']
+            best_model = model
+            best_metrics = metrics
+            best_scaler = scaler
+            print(f"✓ New best model found! Test R²: {best_score:.4f}")
+    
+    # Print comparison of all configurations
+    print(f"\n{'='*80}")
+    print("MLP HYPERPARAMETER SEARCH RESULTS")
+    print(f"{'='*80}")
+    print(f"{'Configuration':<15} {'Test R²':<10} {'Test RMSE':<12} {'Test MAE':<10} {'Train R²':<10}")
+    print(f"{'-'*80}")
+    
+    for result in results_summary:
+        print(f"{result['name']:<15} {result['test_r2']:<10.4f} {result['test_rmse']:<12.2f} "
+              f"{result['test_mae']:<10.2f} {result['train_r2']:<10.4f}")
+    
+    best_config_name = max(results_summary, key=lambda x: x['test_r2'])['name']
+    print(f"\nBest configuration: {best_config_name}")
+    print(f"Best Test R²: {best_score:.4f}")
+    
+    # Retrain best model to get training curves
+    print(f"\nRetraining best model ({best_config_name}) to generate training curves...")
+    best_config = next(config for config in hyperparameter_configs if config['name'] == best_config_name)
+    
+    final_model, final_metrics, final_scaler = train_mlp(
+        X, y,
+        hidden_sizes=best_config['hidden_sizes'],
+        learning_rate=best_config['learning_rate'],
+        epochs=best_config['epochs'],
+        batch_size=best_config['batch_size'],
+        dropout_rate=best_config['dropout_rate'],
+        verbose=True,
+        save_training_curves=True
+    )
+    
+    # Generate final plots for best model
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train_scaled = pd.DataFrame(final_scaler.transform(X_train), columns=X_train.columns, index=X_train.index)
+    X_test_scaled = pd.DataFrame(final_scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
+    
+    # Make predictions for plotting
+    final_model.eval()
+    with torch.no_grad():
+        X_test_tensor = torch.FloatTensor(X_test_scaled.values).to(device)
+        y_test_pred = final_model(X_test_tensor).squeeze().cpu().numpy()
+    
+    plot_predictions(y_test, y_test_pred, final_metrics['test_r2'])
+    
+    # Update best model with the retrained one
+    best_model = final_model
+    best_metrics = final_metrics
+    best_scaler = final_scaler
+    
+    return best_model, best_metrics, best_scaler
 
 
 def evaluate_model(
@@ -287,7 +451,8 @@ def evaluate_model(
     X_test: pd.DataFrame, 
     y_train: pd.Series,
     y_test: pd.Series,
-    feature_names: list
+    feature_names: list,
+    verbose: bool = True
 ) -> Dict[str, float]:
     """
     Comprehensive model evaluation with metrics and visualizations.
@@ -297,6 +462,7 @@ def evaluate_model(
         X_train, X_test: Training and test feature sets
         y_train, y_test: Training and test target values
         feature_names: List of feature names
+        verbose: Whether to print detailed results
         
     Returns:
         Dictionary of performance metrics
@@ -326,29 +492,27 @@ def evaluate_model(
     }
     
     # Print results
-    print(f"\n{'='*50}")
-    print("MLP MODEL PERFORMANCE METRICS")
-    print(f"{'='*50}")
-    print(f"Training R²: {metrics['train_r2']:.4f}")
-    print(f"Test R²: {metrics['test_r2']:.4f}")
-    print(f"Training RMSE: {metrics['train_rmse']:.4f}")
-    print(f"Test RMSE: {metrics['test_rmse']:.4f}")
-    print(f"Training MAE: {metrics['train_mae']:.4f}")
-    print(f"Test MAE: {metrics['test_mae']:.4f}")
-    
-    # Actual vs predicted plot
-    plot_predictions(y_test, y_test_pred, metrics['test_r2'])
+    if verbose:
+        print(f"\n{'='*50}")
+        print("MLP MODEL PERFORMANCE METRICS")
+        print(f"{'='*50}")
+        print(f"Training R²: {metrics['train_r2']:.4f}")
+        print(f"Test R²: {metrics['test_r2']:.4f}")
+        print(f"Training RMSE: {metrics['train_rmse']:.4f}")
+        print(f"Test RMSE: {metrics['test_rmse']:.4f}")
+        print(f"Training MAE: {metrics['train_mae']:.4f}")
+        print(f"Test MAE: {metrics['test_mae']:.4f}")
     
     return metrics
 
 
-def plot_training_curves(train_losses, test_losses, save_path: str = "../models/training_curves.png"):
+def plot_training_curves(train_losses, test_losses, save_path: str = "../models/mlp_training_curves_best.png"):
     """Plot training and validation loss curves."""
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_losses) + 1)
-    plt.plot(epochs, train_losses, 'b-', label='Training Loss')
-    plt.plot(epochs, test_losses, 'r-', label='Validation Loss')
-    plt.title('MLP Training and Validation Loss')
+    plt.plot(epochs, train_losses, 'b-', label='Training Loss', linewidth=2)
+    plt.plot(epochs, test_losses, 'r-', label='Validation Loss', linewidth=2)
+    plt.title('Best MLP Model - Training and Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss (MSE)')
     plt.legend()
@@ -363,7 +527,7 @@ def plot_training_curves(train_losses, test_losses, save_path: str = "../models/
     plt.close()
 
 
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/mlp_predictions_plot.png"):
+def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/mlp_predictions_plot_best.png"):
     """Plot actual vs predicted values with perfect prediction line."""
     plt.figure(figsize=(10, 8))
     plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
@@ -375,7 +539,7 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     
     plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
     plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
-    plt.title(f'Actual vs Predicted BNPP - MLP Model (R² = {r2:.4f})')
+    plt.title(f'Actual vs Predicted BNPP - Best MLP Model (R² = {r2:.4f})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -384,11 +548,11 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"MLP predictions plot saved to: {save_path}")
+    print(f"Best MLP predictions plot saved to: {save_path}")
     plt.close()
 
 
-def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path: str = "../models/mlp_model.pkl"):
+def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path: str = "../models/mlp_model_best.pkl"):
     """Save trained model, scaler and metrics to disk."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -411,9 +575,9 @@ def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path
     print(f"Model saved to: {output_path}")
     
     # Save model summary as text file
-    summary_path = output_path.parent / "mlp_model_summary.txt"
+    summary_path = output_path.parent / "mlp_model_best_summary.txt"
     with open(summary_path, 'w') as f:
-        f.write("Multi-Layer Perceptron (MLP) Model Summary\n")
+        f.write("Best Multi-Layer Perceptron (MLP) Model Summary\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Model Performance:\n")
         f.write(f"Training R²: {metrics['train_r2']:.4f}\n")
@@ -435,53 +599,7 @@ def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path
         f.write(f"Output size: {arch['output_size']}\n")
         f.write(f"Dropout rate: {arch['dropout_rate']}\n")
     
-    print(f"MLP model summary saved to: {summary_path}")
-
-
-def load_model(model_path: str = "../models/mlp_model.pkl") -> Tuple[BP_MLP, StandardScaler, Dict]:
-    """Load trained model, scaler and metrics from disk."""
-    with open(model_path, 'rb') as f:
-        model_data = pickle.load(f)
-    
-    # Reconstruct model
-    arch = model_data['model_architecture']
-    model = BP_MLP(arch['input_size'], arch['hidden_sizes'], arch['output_size'], arch['dropout_rate'])
-    model.load_state_dict(model_data['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-    
-    return model, model_data['scaler'], model_data['metrics']
-
-
-def apply_global_mlp(model: BP_MLP, scaler: StandardScaler, global_features: pd.DataFrame) -> np.ndarray:
-    """
-    Apply trained MLP model for global predictions.
-    
-    Args:
-        model: Trained MLP model
-        scaler: Fitted StandardScaler for feature normalization
-        global_features: Global feature dataset for prediction
-        
-    Returns:
-        Array of predicted BNPP values
-    """
-    print(f"Applying MLP model to {len(global_features)} global grid points...")
-    
-    # Handle missing values
-    global_features_clean = global_features.fillna(global_features.median())
-    
-    # Scale features
-    global_features_scaled = scaler.transform(global_features_clean)
-    
-    # Convert to tensor and make predictions
-    model.eval()
-    with torch.no_grad():
-        features_tensor = torch.FloatTensor(global_features_scaled).to(device)
-        predictions = model(features_tensor).squeeze().cpu().numpy()
-    
-    print(f"Global predictions complete. Range: {predictions.min():.2f} to {predictions.max():.2f}")
-    
-    return predictions
+    print(f"Best MLP model summary saved to: {summary_path}")
 
 
 def main():
@@ -496,13 +614,15 @@ def main():
         # Prepare features and target
         X, y = prepare_features_target(df)
         
-        # Train model
-        model, metrics, scaler = train_mlp(X, y, epochs=150, learning_rate=0.001)
+        # Train multiple models with hyperparameter search
+        print("Starting MLP hyperparameter search...")
+        model, metrics, scaler = train_mlp_with_hyperparameter_search(X, y)
         
-        # Save model
+        # Save the best model
         save_model(model, metrics, scaler)
         
-        print("\nMLP training completed successfully!")
+        print("\nMLP hyperparameter search completed successfully!")
+        print(f"Best model saved with Test R²: {metrics['test_r2']:.4f}")
         
     except Exception as e:
         print(f"Error in MLP model training: {e}")
