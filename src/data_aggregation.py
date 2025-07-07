@@ -5,7 +5,10 @@ This script fetches data from various sources, processes them, and aggregate the
     for machine learning (deep learning) next.
 
 What it does:
-    - Reads grassland and forest data from specified CSV files.
+    - Reads processed grassland and forest BNPP data from CSV files.
+    - Performs unit conversions to standardize BNPP measurements:
+        * Forest data: Mg C ha⁻¹ yr⁻¹ → g C m⁻² yr⁻¹ (×100 conversion factor)
+        * Grassland data: g m⁻² yr⁻¹ (assuming carbon equivalent)
     - Renames columns to ensure consistency across datasets.
     - Combines the data into a single DataFrame.
     - Plots the spatial distribution of data points on a map.
@@ -14,10 +17,12 @@ What it does:
     data from the ancillary data sources like weather, soil, and other environmental data.
     
 The data sources include:
-    - grassland data from Dryad
-    - forest data from ForC
+    - grassland BNPP data: processed from Dryad global grassland database (grassland_bnpp_data.csv)
+    - forest BNPP data: processed from ForC database (ForC_BNPP_root_C_processed.csv)
     - other potential sources in the future.
-    - ancillary data from various sources.
+    - ancillary data from various sources:
+        * TerraClimate: climate variables (aet, pet, ppt, tmax, tmin, vpd)
+        * GLASS: Gross Primary Production (GPP) satellite data from yearly aggregations
 
 Check out https://github.com/NVIDIA-Omniverse-blueprints/earth2-weather-analytics 
     for inspirations for structure and data sources.
@@ -49,16 +54,57 @@ except ImportError:
     SCIPY_AVAILABLE = False
 
 def process_productivity_data(df):
-    """Process grassland/forest productivity data with standard column renaming."""
+    """Process grassland/forest productivity data with standard column renaming and unit conversion."""
     # Make column names consistent
     if 'Latitude' in df.columns and 'Longitude' in df.columns:
         df.rename(columns={'Latitude': 'lat', 'Longitude': 'lon'}, inplace=True)
+    
+    # Handle BNPP column - different names in grassland vs forest data
     if 'mean' in df.columns:
         df.rename(columns={'mean': 'BNPP'}, inplace=True)
+    elif 'BNPP' in df.columns:
+        # Grassland data already has BNPP column
+        pass
+    
+    # Handle biome/ecosystem type columns
     if 'dominant.veg' in df.columns:
         df.rename(columns={'dominant.veg': 'biome'}, inplace=True)
-    if 'Grassland type' in df.columns:
+    elif 'dominant.life.form' in df.columns:
+        df.rename(columns={'dominant.life.form': 'biome'}, inplace=True)
+    elif 'Grassland type' in df.columns:
         df.rename(columns={'Grassland type': 'biome'}, inplace=True)
+    
+    # Determine data source and handle unit conversions
+    data_source = None
+    if 'Data_Source' in df.columns:
+        if 'Grassland' in str(df['Data_Source'].iloc[0]):
+            data_source = 'grassland'
+        elif 'ForC' in str(df['Data_Source'].iloc[0]):
+            data_source = 'forest'
+    elif 'Variable_Name' in df.columns and 'BNPP_root_C' in str(df['Variable_Name'].iloc[0]):
+        data_source = 'forest'
+    elif 'Grassland type' in df.columns:
+        data_source = 'grassland'
+    
+    # Unit conversions to standardize BNPP values
+    if 'BNPP' in df.columns and data_source:
+        if data_source == 'forest':
+            # Convert forest data from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹
+            # 1 Mg C ha⁻¹ yr⁻¹ = 1000 kg C / 10000 m² / yr = 0.1 kg C m⁻² yr⁻¹ = 100 g C m⁻² yr⁻¹
+            df['BNPP'] = df['BNPP'] * 100  # Convert to g C m⁻² yr⁻¹
+            df['BNPP_units'] = 'g C m⁻² yr⁻¹'
+            print(f"Converted forest BNPP from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹")
+        elif data_source == 'grassland':
+            # Grassland data is in g/m²/year, assuming this is already carbon equivalent
+            # If not carbon-specific, we may need additional conversion factors
+            df['BNPP_units'] = 'g m⁻² yr⁻¹'
+            print(f"Grassland BNPP units: g m⁻² yr⁻¹ (assuming carbon equivalent)")
+    
+    # Add data source identifier
+    if data_source:
+        df['data_source'] = data_source
+    elif 'data_source' not in df.columns:
+        df['data_source'] = 'productivity'
     
     return df
 
@@ -77,6 +123,27 @@ def process_terraclimate_data(df, file_path):
     
     # Add data source identifier
     df['data_source'] = 'terraclimate'
+    
+    return df
+
+def process_glass_data(df, file_path):
+    """Process GLASS GPP data with appropriate column naming."""
+    # Ensure consistent lat/lon column names
+    if 'latitude' in df.columns and 'longitude' in df.columns:
+        df.rename(columns={'latitude': 'lat', 'longitude': 'lon'}, inplace=True)
+    
+    # Extract variable name from file path and rename value column
+    file_name = file_path.stem
+    if 'GPP_YEARLY' in file_name:
+        # Rename 'value' column to 'gpp_yearly' for clarity
+        if 'value' in df.columns:
+            df.rename(columns={'value': 'gpp_yearly'}, inplace=True)
+    
+    # Add data source identifier
+    df['data_source'] = 'glass'
+    
+    # Convert units from gC m-2 year-1 to more standard units if needed
+    # Keep original units for now, can be converted later if needed
     
     return df
 
@@ -114,7 +181,7 @@ def merge_datasets_by_location(productivity_df, climate_df, tolerance=0.1):
     merged_df = productivity_df.copy()
     
     # Add climate variables for points within tolerance
-    climate_vars = [col for col in climate_df.columns if col not in ['lat', 'lon', 'point_name', 'units', 'data_source']]
+    climate_vars = [col for col in climate_df.columns if col not in ['lat', 'lon', 'point_name', 'units', 'data_source', 'date', 'product']]
     
     for var in climate_vars:
         merged_df[var] = np.nan
@@ -174,6 +241,10 @@ def aggregate_data(data_files=[]):
                 # TerraClimate data processing
                 df = process_terraclimate_data(df, file_path)
                 climate_dataframes.append(df)
+            elif 'glass' in str(file_path) or 'GPP_YEARLY' in str(file_path):
+                # GLASS GPP data processing
+                df = process_glass_data(df, file_path)
+                climate_dataframes.append(df)
             else:
                 # Productivity data processing (grassland/forest)
                 df = process_productivity_data(df)
@@ -200,7 +271,7 @@ def aggregate_data(data_files=[]):
         # Process each climate variable separately to avoid complex merges
         for df in climate_dataframes:
             # Get the variable name from the dataframe columns
-            var_cols = [col for col in df.columns if col not in ['lat', 'lon', 'point_name', 'units', 'data_source']]
+            var_cols = [col for col in df.columns if col not in ['lat', 'lon', 'point_name', 'units', 'data_source', 'date', 'product']]
             if var_cols:
                 var_name = var_cols[0]
                 print(f"  Processing {var_name}...")
@@ -244,18 +315,26 @@ def aggregate_data(data_files=[]):
         productivity_cols = [col for col in integrated_df.columns if col in ['BNPP', 'mean', 'productivity']]
         if productivity_cols:
             essential_columns.extend(productivity_cols)
+            print(f"Found productivity column: {productivity_cols}")
+            # Also include units column if available
+            if 'BNPP_units' in integrated_df.columns:
+                essential_columns.append('BNPP_units')
         else:
             print("Warning: No productivity column found. Looking for numeric columns...")
             # Fallback: look for numeric columns that might represent productivity
             numeric_cols = integrated_df.select_dtypes(include=[np.number]).columns
-            potential_prod_cols = [col for col in numeric_cols if col not in ['lat', 'lon', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd']]
+            potential_prod_cols = [col for col in numeric_cols if col not in ['lat', 'lon', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly', 'Entry_ID', 'Altitude', 'Sampling year', 'BNPP_SE', 'MAT', 'MAP', 'stand.age', 'masl']]
             if potential_prod_cols:
                 essential_columns.extend(potential_prod_cols[:1])  # Take first one
                 print(f"Using {potential_prod_cols[0]} as productivity measure")
         
         # Add climate variables
-        climate_cols = [col for col in integrated_df.columns if col in ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd']]
+        climate_cols = [col for col in integrated_df.columns if col in ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly']]
         essential_columns.extend(climate_cols)
+        
+        # Add data source identifier
+        if 'data_source' in integrated_df.columns:
+            essential_columns.append('data_source')
         
         # Filter the dataframe to keep only essential columns
         available_cols = [col for col in essential_columns if col in integrated_df.columns]
@@ -376,15 +455,16 @@ def plot_data_distribution(df):
 def main():
     parser = argparse.ArgumentParser(description='Aggregate data from different sources for machine learning')
     parser.add_argument('--files', '-f', nargs='+', 
-                       default=['grassland/grassland_component_df.csv',
-                                'forc/forest_component_df.csv',
+                       default=['grassland/grassland_bnpp_data.csv',
+                                'forc/ForC_BNPP_root_C_processed.csv',
                                 '../ancillary/terraclimate/point_extractions/aet_means.csv',
                                 '../ancillary/terraclimate/point_extractions/pet_means.csv',
                                 '../ancillary/terraclimate/point_extractions/ppt_means.csv',
                                 '../ancillary/terraclimate/point_extractions/tmax_means.csv',
                                 '../ancillary/terraclimate/point_extractions/tmin_means.csv',
-                                '../ancillary/terraclimate/point_extractions/vpd_means.csv'],
-                       help='List of data files to aggregate (default: grassland, forest, and terraclimate mean files)')
+                                '../ancillary/terraclimate/point_extractions/vpd_means.csv',
+                                '../ancillary/glass/point_extractions/GPP_YEARLY_all_points.csv'],
+                       help='List of data files to aggregate (default: grassland, forest, terraclimate, and GLASS GPP files)')
     parser.add_argument('--no-plot', action='store_true',
                        help='Skip plotting the data distribution')
     parser.add_argument('--output-dir', '-o', type=str, default='../productivity',
