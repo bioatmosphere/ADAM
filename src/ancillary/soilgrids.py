@@ -1,9 +1,11 @@
 """
-Download and process soil organic carbon stock data from SoilGrids.
+Download and process soil data from SoilGrids.
 Uses GDAL to handle remote VRT files and create optimized local GeoTIFFs.
 
 
-ocs:	Organic carbon stocks
+Supported properties:
+ - ocs: Organic carbon stocks
+ - clay: Clay content
 
 
 https://www.isric.org/explore/soilgrids/soilgrids-access
@@ -29,12 +31,14 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import rasterio
 
-def download_soilgrids_data(output_dir="./data"):
+def download_soilgrids_data(output_dir="./data", property_name="ocs", depth="0-30cm"):
     """
     Download and process SoilGrids data with optimized settings.
     
     Args:
         output_dir (str): Directory to save the processed GeoTIFF
+        property_name (str): Property to download ('ocs' for carbon, 'clay' for clay content)
+        depth (str): Depth layer (e.g., '0-30cm', '0-5cm', '5-15cm', '15-30cm')
     """
     try:
         # Create output directory
@@ -61,17 +65,20 @@ def download_soilgrids_data(output_dir="./data"):
         
         # Source VRT URL with optimized curl options
         src_url = ('/vsicurl?max_retry=5&retry_delay=0.5&list_dir=no&'
-                   'tcp_keepalive=yes&timeout=300&low_speed_limit=1000&'
+                   'timeout=300&low_speed_limit=1000&'
                    'low_speed_time=30&url='
-                   'https://files.isric.org/soilgrids/latest/data/ocs/'
-                   'ocs_0-30cm_mean.vrt')
+                   f'https://files.isric.org/soilgrids/latest/data/{property_name}/'
+                   f'{property_name}_{depth}_mean.vrt')
         
         # Output file path
-        output_file = os.path.join(output_dir, 'soil_carbon_stock.tif')
+        property_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+        filename = property_names.get(property_name, property_name)
+        output_file = os.path.join(output_dir, f'{filename}.tif')
         
-        print(f"Downloading soil carbon stock data to: {output_file}")
+        print(f"Downloading {property_name} data ({depth}) to: {output_file}")
         
-        # Download and process the data
+        # Download and process the data using GDAL
+        print("Starting GDAL download and processing...")
         ds = gdal.Translate(output_file, src_url, **kwargs)
         
         if ds is not None:
@@ -83,16 +90,19 @@ def download_soilgrids_data(output_dir="./data"):
         print(f"Error downloading SoilGrids data: {e}")
         return False
 
-def extract_soil_data_for_points(lat_lon_file, output_file="soil_carbon_points.csv", 
-                                checkpoint_file=None, batch_size=50):
+def extract_soil_data_for_points(lat_lon_file, output_file="soil_data_points.csv", 
+                                checkpoint_file=None, batch_size=50, 
+                                properties=['ocs', 'clay'], depth="0-30cm"):
     """
-    Extract soil carbon data for specific coordinate points using SoilGrids REST API.
+    Extract soil data for specific coordinate points using SoilGrids REST API.
     
     Args:
         lat_lon_file (str): Path to CSV file with 'lat' and 'lon' columns
         output_file (str): Output CSV file for soil data
         checkpoint_file (str): File to save progress (auto-generated if None)
         batch_size (int): Number of points to process before saving checkpoint
+        properties (list): List of properties to extract ('ocs', 'clay', etc.)
+        depth (str): Depth layer (e.g., '0-30cm', '0-5cm', '5-15cm', '15-30cm')
     """
     
     # Read coordinate points
@@ -125,73 +135,98 @@ def extract_soil_data_for_points(lat_lon_file, output_file="soil_carbon_points.c
             
         lat, lon = row['lat'], row['lon']
         
-        # API parameters for soil organic carbon stock (0-30cm)
-        params = {
-            'lon': lon,
-            'lat': lat,
-            'property': 'ocs',
-            'depth': '0-30cm',
-            'value': 'mean'
-        }
+        # Initialize result dictionary
+        point_result = {'lat': lat, 'lon': lon}
         
-        try:
-            # Make API request with timeout and retry logic
-            max_retries = 3
-            retry_delay = 2
-            response = None
-            
-            for attempt in range(max_retries):
-                try:
-                    response = requests.get(base_url, params=params, 
-                                          timeout=(10, 60))  # (connect, read) timeout
-                    
-                    if response.status_code == 429:  # Rate limited
-                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
-                        print(f"Rate limited, waiting {wait_time}s before retry...")
-                        time.sleep(wait_time)
-                        continue
-                    else:
-                        break
+        # Process each property
+        for prop in properties:
+            # API parameters for each property
+            params = {
+                'lon': lon,
+                'lat': lat,
+                'property': prop,
+                'depth': depth,
+                'value': 'mean'
+            }
+        
+            try:
+                # Make API request with timeout and retry logic
+                max_retries = 3
+                retry_delay = 2
+                response = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.get(base_url, params=params, 
+                                              timeout=(10, 60))  # (connect, read) timeout
                         
-                except requests.exceptions.Timeout:
-                    if attempt < max_retries - 1:
-                        wait_time = retry_delay * (2 ** attempt)
-                        print(f"Timeout for point ({lat}, {lon}), retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    else:
-                        print(f"Final timeout for point ({lat}, {lon}), skipping...")
-                        results.append({'lat': lat, 'lon': lon, 'soil_carbon_stock': None})
-                        break
-            
-            if response and response.status_code == 200:
-                data = response.json()
-                
-                # Extract soil carbon value
-                if 'properties' in data and 'layers' in data['properties']:
-                    layers = data['properties']['layers']
-                    if layers and 'depths' in layers[0]:
-                        depths = layers[0]['depths']
-                        if depths and 'values' in depths[0]:
-                            soil_carbon = depths[0]['values']['mean']
-                            
-                            results.append({
-                                'lat': lat,
-                                'lon': lon,
-                                'soil_carbon_stock': soil_carbon
-                            })
+                        if response.status_code == 429:  # Rate limited
+                            wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                            print(f"Rate limited, waiting {wait_time}s before retry...")
+                            time.sleep(wait_time)
+                            continue
                         else:
-                            results.append({'lat': lat, 'lon': lon, 'soil_carbon_stock': None})
+                            break
+                            
+                    except requests.exceptions.Timeout:
+                        if attempt < max_retries - 1:
+                            wait_time = retry_delay * (2 ** attempt)
+                            print(f"Timeout for point ({lat}, {lon}), retrying in {wait_time}s...")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            print(f"Final timeout for point ({lat}, {lon}), skipping {prop}...")
+                            break
+            
+                if response and response.status_code == 200:
+                    data = response.json()
+                    # print(f"API response for {prop}: {data}")  # Debug
+                    
+                    # Extract property value
+                    if 'properties' in data and 'layers' in data['properties']:
+                        layers = data['properties']['layers']
+                        if layers and 'depths' in layers[0]:
+                            depths = layers[0]['depths']
+                            if depths and 'values' in depths[0]:
+                                value = depths[0]['values']['mean']
+                                
+                                # Map property names to column names
+                                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                                column_name = prop_names.get(prop, prop)
+                                point_result[column_name] = value
+                                # print(f"Added {column_name} = {value}")  # Debug
+                            else:
+                                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                                column_name = prop_names.get(prop, prop)
+                                point_result[column_name] = None
+                                # print(f"No values found for {prop}")  # Debug
+                    else:
+                        prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                        column_name = prop_names.get(prop, prop)
+                        point_result[column_name] = None
+                        # print(f"No properties/layers found for {prop}")  # Debug
+                elif response:
+                    print(f"API error for point ({lat}, {lon}), property {prop}: {response.status_code}")
+                    prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                    column_name = prop_names.get(prop, prop)
+                    point_result[column_name] = None
                 else:
-                    results.append({'lat': lat, 'lon': lon, 'soil_carbon_stock': None})
-            elif response:
-                print(f"API error for point ({lat}, {lon}): {response.status_code}")
-                results.append({'lat': lat, 'lon': lon, 'soil_carbon_stock': None})
-            # If response is None (timeout handled above), skip this section
-                
-        except Exception as e:
-            print(f"Error processing point ({lat}, {lon}): {e}")
-            results.append({'lat': lat, 'lon': lon, 'soil_carbon_stock': None})
+                    prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                    column_name = prop_names.get(prop, prop)
+                    point_result[column_name] = None
+                    
+            except Exception as e:
+                print(f"Error processing point ({lat}, {lon}), property {prop}: {e}")
+                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                column_name = prop_names.get(prop, prop)
+                point_result[column_name] = None
+            
+            # Add delay between property requests
+            time.sleep(0.5)
+        
+        # Add the complete point result
+        # print(f"Point result: {point_result}")  # Debug
+        results.append(point_result)
         
         # Add delay to respect API rate limits
         time.sleep(1.0)  # Increased to 1 second between requests
@@ -207,7 +242,7 @@ def extract_soil_data_for_points(lat_lon_file, output_file="soil_carbon_points.c
     # Save final results
     results_df = pd.DataFrame(results)
     results_df.to_csv(output_file, index=False)
-    print(f"Soil carbon data saved to: {output_file}")
+    print(f"Soil data saved to: {output_file}")
     
     # Clean up checkpoint file
     if Path(checkpoint_file).exists():
@@ -216,16 +251,18 @@ def extract_soil_data_for_points(lat_lon_file, output_file="soil_carbon_points.c
     
     return results_df
 
-def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figures"):
+def plot_soil_data_points(csv_file, output_dir="../../ancillary/soilgrids/figures", 
+                         property_name="soil_carbon_stock"):
     """
-    Create publication-quality plots of soil carbon data points.
+    Create publication-quality plots of soil data points.
     
     Args:
-        csv_file (str): Path to CSV file with soil carbon data
+        csv_file (str): Path to CSV file with soil data
         output_dir (str): Directory to save the plots
+        property_name (str): Property to plot ('soil_carbon_stock' or 'clay_content')
     
     Returns:
-        pd.DataFrame: Cleaned dataset with valid soil carbon values
+        pd.DataFrame: Cleaned dataset with valid soil data values
     """
     
     # Set publication-quality style
@@ -243,7 +280,7 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
     # Read and validate data
     try:
         df = pd.read_csv(csv_file)
-        required_cols = ['lat', 'lon', 'soil_carbon_stock']
+        required_cols = ['lat', 'lon', property_name]
         if not all(col in df.columns for col in required_cols):
             raise ValueError(f"CSV must contain columns: {required_cols}")
     except Exception as e:
@@ -251,31 +288,35 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
         return None
     
     # Clean data and calculate statistics
-    df_clean = df.dropna(subset=['soil_carbon_stock'])
-    df_missing = df[df['soil_carbon_stock'].isna()]
+    df_clean = df.dropna(subset=[property_name])
+    df_missing = df[df[property_name].isna()]
     
     if len(df_clean) == 0:
-        print("No valid soil carbon data found!")
+        print(f"No valid {property_name} data found!")
         return None
     
     # Calculate comprehensive statistics
     stats = {
         'count': len(df_clean),
         'missing': len(df_missing),
-        'mean': df_clean['soil_carbon_stock'].mean(),
-        'median': df_clean['soil_carbon_stock'].median(),
-        'std': df_clean['soil_carbon_stock'].std(),
-        'min': df_clean['soil_carbon_stock'].min(),
-        'max': df_clean['soil_carbon_stock'].max(),
-        'q25': df_clean['soil_carbon_stock'].quantile(0.25),
-        'q75': df_clean['soil_carbon_stock'].quantile(0.75)
+        'mean': df_clean[property_name].mean(),
+        'median': df_clean[property_name].median(),
+        'std': df_clean[property_name].std(),
+        'min': df_clean[property_name].min(),
+        'max': df_clean[property_name].max(),
+        'q25': df_clean[property_name].quantile(0.25),
+        'q75': df_clean[property_name].quantile(0.75)
     }
+    
+    # Set units based on property
+    units = {'soil_carbon_stock': 't C/ha', 'clay_content': '%', 'silt_content': '%', 'sand_content': '%', 'nitrogen_content': 'cg/kg'}
+    unit = units.get(property_name, 'units')
     
     print(f"Dataset Summary:")
     print(f"  Valid points: {stats['count']}")
     print(f"  Missing data: {stats['missing']}")
-    print(f"  Range: {stats['min']:.1f} - {stats['max']:.1f} t C/ha")
-    print(f"  Mean ± SD: {stats['mean']:.1f} ± {stats['std']:.1f} t C/ha")
+    print(f"  Range: {stats['min']:.1f} - {stats['max']:.1f} {unit}")
+    print(f"  Mean ± SD: {stats['mean']:.1f} ± {stats['std']:.1f} {unit}")
     
     # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -304,15 +345,30 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
     gl.ylabel_style = {'size': 10}
     
     # Create custom colormap with better contrast
-    colors = ['#ffffcc', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#bd0026', '#800026']
+    if property_name == 'clay_content':
+        colors = ['#f7fcfd', '#e0ecf4', '#bfd3e6', '#9ebcda', '#8c96c6', '#8c6bb1', '#88419d', '#6e016b']
+        cmap_name = 'clay'
+    elif property_name == 'silt_content':
+        colors = ['#fff7fb', '#ece7f2', '#d0d1e6', '#a6bddb', '#74a9cf', '#3690c0', '#0570b0', '#034e7b']
+        cmap_name = 'silt'
+    elif property_name == 'sand_content':
+        colors = ['#fffef0', '#feebe2', '#fbb4ae', '#f768a1', '#c51b8a', '#7a0177', '#49006a', '#2d004b']
+        cmap_name = 'sand'
+    elif property_name == 'nitrogen_content':
+        colors = ['#f7fcf5', '#e5f5e0', '#c7e9c0', '#a1d99b', '#74c476', '#41ab5d', '#238b45', '#006d2c']
+        cmap_name = 'nitrogen'
+    else:
+        colors = ['#ffffcc', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#bd0026', '#800026']
+        cmap_name = 'soil_carbon'
+    
     n_bins = 100
-    cmap = mcolors.LinearSegmentedColormap.from_list('soil_carbon', colors, N=n_bins)
+    cmap = mcolors.LinearSegmentedColormap.from_list(cmap_name, colors, N=n_bins)
     
     # Create scatter plot with improved styling
-    vmin, vmax = np.percentile(df_clean['soil_carbon_stock'], [5, 95])  # Use 5-95 percentile for better contrast
+    vmin, vmax = np.percentile(df_clean[property_name], [5, 95])  # Use 5-95 percentile for better contrast
     
     scatter = ax.scatter(df_clean['lon'], df_clean['lat'],
-                        c=df_clean['soil_carbon_stock'],
+                        c=df_clean[property_name],
                         cmap=cmap,
                         s=50,
                         alpha=0.8,
@@ -337,22 +393,36 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
         ax.legend(loc='lower left', framealpha=0.9)
     
     # Enhanced colorbar
+    labels = {'soil_carbon_stock': 'Soil Organic Carbon Stock (t C/ha)',
+              'clay_content': 'Clay Content (%)',
+              'silt_content': 'Silt Content (%)',
+              'sand_content': 'Sand Content (%)',
+              'nitrogen_content': 'Nitrogen Content (cg/kg)'}
+    label = labels.get(property_name, property_name)
+    
     cbar = plt.colorbar(scatter, ax=ax, 
                        orientation='horizontal',
-                       label='Soil Organic Carbon Stock (t C/ha)',
+                       label=label,
                        pad=0.08,
                        shrink=0.8,
                        aspect=40)
     cbar.ax.tick_params(labelsize=10)
     
     # Professional title with subtitle
-    plt.suptitle('Global Distribution of Soil Organic Carbon Stock', 
-                fontsize=16, fontweight='bold', y=0.95)
-    ax.set_title(f'Study Sites with Soil Carbon Measurements (n={stats["count"]})', 
+    titles = {'soil_carbon_stock': 'Global Distribution of Soil Organic Carbon Stock',
+              'clay_content': 'Global Distribution of Clay Content',
+              'silt_content': 'Global Distribution of Silt Content',
+              'sand_content': 'Global Distribution of Sand Content',
+              'nitrogen_content': 'Global Distribution of Nitrogen Content'}
+    title = titles.get(property_name, f'Global Distribution of {property_name}')
+    
+    plt.suptitle(title, fontsize=16, fontweight='bold', y=0.95)
+    ax.set_title(f'Study Sites with {property_name.replace("_", " ").title()} Measurements (n={stats["count"]})', 
                 fontsize=12, pad=15)
     
     # Save map
-    map_path = Path(output_dir) / 'soil_carbon_global_map.pdf'
+    map_filename = f'{property_name}_global_map.pdf'
+    map_path = Path(output_dir) / map_filename
     plt.savefig(map_path, dpi=300, bbox_inches='tight', 
                facecolor='white', edgecolor='none')
     print(f"World map saved to: {map_path}")
@@ -362,16 +432,27 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
     
     # Histogram with KDE overlay
     n_bins = min(30, len(df_clean) // 5)  # Adaptive bin number
-    ax2.hist(df_clean['soil_carbon_stock'], 
+    if property_name == 'soil_carbon_stock':
+        hist_color = '#8b4513'
+    elif property_name == 'clay_content':
+        hist_color = '#4682b4'
+    elif property_name == 'silt_content':
+        hist_color = '#2e8b57'
+    elif property_name == 'sand_content':
+        hist_color = '#cd853f'
+    else:  # nitrogen_content
+        hist_color = '#228b22'
+    
+    ax2.hist(df_clean[property_name], 
              bins=n_bins, 
              alpha=0.7, 
-             color='#8b4513',
+             color=hist_color,
              edgecolor='black',
              linewidth=0.7,
              density=True)
     
     # Add KDE curve
-    kde = scipy_stats.gaussian_kde(df_clean['soil_carbon_stock'])
+    kde = scipy_stats.gaussian_kde(df_clean[property_name])
     x_range = np.linspace(stats['min'], stats['max'], 100)
     ax2.plot(x_range, kde(x_range), 'r-', linewidth=2, label='Density curve')
     
@@ -379,34 +460,44 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
     ax2.axvline(stats['mean'], color='red', linestyle='--', linewidth=2, label=f'Mean ({stats["mean"]:.1f})')
     ax2.axvline(stats['median'], color='blue', linestyle='--', linewidth=2, label=f'Median ({stats["median"]:.1f})')
     
-    ax2.set_xlabel('Soil Organic Carbon Stock (t C/ha)')
+    ax2.set_xlabel(f'{property_name.replace("_", " ").title()} ({unit})')
     ax2.set_ylabel('Density')
-    ax2.set_title('Distribution of Soil Carbon Values')
+    ax2.set_title(f'Distribution of {property_name.replace("_", " ").title()} Values')
     ax2.grid(True, alpha=0.3)
     ax2.legend()
     
     # Box plot with detailed statistics
-    ax3.boxplot(df_clean['soil_carbon_stock'], 
+    if property_name == 'soil_carbon_stock':
+        box_color = '#deb887'
+    elif property_name == 'clay_content':
+        box_color = '#87ceeb'
+    elif property_name == 'silt_content':
+        box_color = '#98fb98'
+    elif property_name == 'sand_content':
+        box_color = '#f4a460'
+    else:  # nitrogen_content
+        box_color = '#90ee90'
+    ax3.boxplot(df_clean[property_name], 
                patch_artist=True,
-               boxprops=dict(facecolor='#deb887', alpha=0.7),
+               boxprops=dict(facecolor=box_color, alpha=0.7),
                medianprops=dict(color='red', linewidth=2))
     
-    ax3.set_ylabel('Soil Organic Carbon Stock (t C/ha)')
+    ax3.set_ylabel(f'{property_name.replace("_", " ").title()} ({unit})')
     ax3.set_title('Statistical Summary')
     ax3.grid(True, alpha=0.3)
     
     # Add detailed statistics text
     stats_text = f"""Dataset Statistics (n={stats['count']})
     
-    Range: {stats['min']:.1f} - {stats['max']:.1f} t C/ha
-    Mean: {stats['mean']:.1f} t C/ha
-    Median: {stats['median']:.1f} t C/ha
-    Std Dev: {stats['std']:.1f} t C/ha
+    Range: {stats['min']:.1f} - {stats['max']:.1f} {unit}
+    Mean: {stats['mean']:.1f} {unit}
+    Median: {stats['median']:.1f} {unit}
+    Std Dev: {stats['std']:.1f} {unit}
 
     Quartiles:
-    Q1 (25%): {stats['q25']:.1f} t C/ha
-    Q3 (75%): {stats['q75']:.1f} t C/ha
-    IQR: {stats['q75'] - stats['q25']:.1f} t C/ha
+    Q1 (25%): {stats['q25']:.1f} {unit}
+    Q3 (75%): {stats['q75']:.1f} {unit}
+    IQR: {stats['q75'] - stats['q25']:.1f} {unit}
 
     Data Quality:
     Valid: {stats['count']} points
@@ -420,7 +511,8 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
     plt.tight_layout()
     
     # Save histogram
-    hist_path = Path(output_dir) / 'soil_carbon_statistics.pdf'
+    hist_filename = f'{property_name}_statistics.pdf'
+    hist_path = Path(output_dir) / hist_filename
     plt.savefig(hist_path, dpi=300, bbox_inches='tight', 
                facecolor='white', edgecolor='none')
     print(f"Statistics plot saved to: {hist_path}")
@@ -430,58 +522,12 @@ def plot_soil_carbon_points(csv_file, output_dir="../../ancillary/soilgrids/figu
     
     # Save summary statistics to CSV
     stats_df = pd.DataFrame([stats])
-    stats_path = Path(output_dir) / 'soil_carbon_summary_stats.csv'
+    stats_filename = f'{property_name}_summary_stats.csv'
+    stats_path = Path(output_dir) / stats_filename
     stats_df.to_csv(stats_path, index=False)
     print(f"Summary statistics saved to: {stats_path}")
     
     return df_clean
-
-def plot_soil_carbon(tiff_path="../../ancillary/soilgrids/soil_carbon_stock.tif"):
-    """
-    Visualize soil organic carbon stock data with enhanced mapping features.
-    """
-    
-    try:
-        with rasterio.open(tiff_path) as src:
-            data = src.read(1)
-            
-            # Create figure with map projection
-            _, ax = plt.subplots(figsize=(15, 10),
-                               subplot_kw={'projection': ccrs.Robinson()})
-            
-            # Add map features using cfeature
-            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':')
-            ax.add_feature(cfeature.LAKES, alpha=0.5)
-            ax.add_feature(cfeature.RIVERS, alpha=0.5)
-            
-            # Plot the data
-            img = ax.imshow(data,
-                          transform=ccrs.PlateCarree(),
-                          cmap='YlOrBr',
-                          vmin=0,
-                          vmax=np.nanpercentile(data, 95))
-            
-            # Add colorbar
-            plt.colorbar(img, 
-                        orientation='horizontal',
-                        label='Soil Organic Carbon Stock (t/ha)',
-                        pad=0.05)
-            
-            plt.title('Global Soil Organic Carbon Stock (0-30cm)', pad=20)
-            
-            # Save figure
-            output_dir = "../../ancillary/soilgrids/figures"
-            Path(output_dir).mkdir(parents=True, exist_ok=True)
-            plt.savefig(f"{output_dir}/soil_carbon_map.pdf",
-                       dpi=300,
-                       bbox_inches='tight')
-            
-            print(f"Map saved to: {output_dir}/soil_carbon_map.pdf")
-            plt.show()
-            
-    except Exception as e:
-        print(f"Error visualizing data: {e}")
 
 
 if __name__ == "__main__":
@@ -489,11 +535,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Download SoilGrids data')
     parser.add_argument('--mode', choices=['global', 'points', 'plot'], default='points',
                        help='Download global data, extract for specific points, or plot existing data')
+    parser.add_argument('--property', type=str, default='ocs',
+                       choices=['ocs', 'clay', 'silt', 'sand', 'nitrogen'], 
+                       help='Property to download (ocs=carbon, clay=clay content, silt=silt content, sand=sand content, nitrogen=nitrogen content)')
+    parser.add_argument('--properties', type=str, nargs='+', default=['ocs', 'clay'],
+                       choices=['ocs', 'clay', 'silt', 'sand', 'nitrogen'],
+                       help='Properties to extract for points mode')
+    parser.add_argument('--depth', type=str, default='0-30cm',
+                       help='Depth layer (e.g., 0-30cm, 0-5cm, 5-15cm, 15-30cm)')
     parser.add_argument('--lat-lon-file', type=str, 
                        default='../../productivity/earth/lat_lon.csv',
                        help='CSV file with lat/lon coordinates for point extraction')
     parser.add_argument('--output', '-o', type=str, 
-                       default='../../ancillary/soilgrids/soil_carbon_points.csv',
+                       default='../../ancillary/soilgrids/soil_data_points.csv',
                        help='Output file path')
     parser.add_argument('--output-dir', type=str, default='../../ancillary/soilgrids',
                        help='Output directory for global download')
@@ -503,17 +557,20 @@ if __name__ == "__main__":
                        help='Number of points to process before saving checkpoint')
     parser.add_argument('--plot-file', type=str,
                        help='CSV file to plot (uses --output path if not specified)')
+    parser.add_argument('--plot-property', type=str, default='soil_carbon_stock',
+                       help='Property to plot (soil_carbon_stock, clay_content, silt_content, sand_content, or nitrogen_content)')
     
     args = parser.parse_args()
     
     if args.mode == 'points':
         # Extract data for specific points
         extract_soil_data_for_points(args.lat_lon_file, args.output, 
-                                   args.checkpoint_file, args.batch_size)
+                                   args.checkpoint_file, args.batch_size,
+                                   args.properties, args.depth)
     elif args.mode == 'plot':
-        # Plot existing soil carbon data
+        # Plot existing soil data
         plot_file = args.plot_file if args.plot_file else args.output
-        plot_soil_carbon_points(plot_file)
+        plot_soil_data_points(plot_file, property_name=args.plot_property)
     else:
         # Download global data
-        download_soilgrids_data(args.output_dir)
+        download_soilgrids_data(args.output_dir, args.property, args.depth)
