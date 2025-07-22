@@ -23,6 +23,9 @@ The data sources include:
     - ancillary data from various sources:
         * TerraClimate: climate variables (aet, pet, ppt, tmax, tmin, vpd)
         * GLASS: Gross Primary Production (GPP) satellite data from yearly aggregations
+        * SoilGrids: soil properties (carbon stock, texture, nutrients, pH, bulk density)
+        * Soil Moisture: EC ORS dataset (volumetric water content)
+        * Elevation: SRTM-based elevation data (meters above sea level)
 
 Check out https://github.com/NVIDIA-Omniverse-blueprints/earth2-weather-analytics 
     for inspirations for structure and data sources.
@@ -45,9 +48,10 @@ import cartopy
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-# Import scipy for spatial distance calculations
+# Import scipy for spatial distance calculations and outlier detection
 try:
     from scipy.spatial.distance import cdist
+    from scipy import stats
     SCIPY_AVAILABLE = True
 except ImportError:
     print("Warning: scipy not available. Spatial merging will use simplified approach.")
@@ -147,6 +151,459 @@ def process_glass_data(df, file_path):
     
     return df
 
+def process_soilgrids_data(df, file_path):
+    """Process SoilGrids soil data with appropriate column naming and unit conversions."""
+    # Ensure consistent lat/lon column names
+    if 'latitude' in df.columns and 'longitude' in df.columns:
+        df.rename(columns={'latitude': 'lat', 'longitude': 'lon'}, inplace=True)
+    
+    # Handle unit conversions for specific soil properties
+    file_name = file_path.stem
+    
+    # pH data needs to be divided by 10 (stored as pH*10)
+    if 'ph_data_points' in file_name and 'ph_in_water' in df.columns:
+        df['ph_in_water'] = df['ph_in_water'] / 10.0
+        print(f"Converted pH values from pH*10 to actual pH")
+    
+    # Bulk density is in cg/cm³ (centigrams per cubic centimeter)
+    if 'bulk_density_data_points' in file_name and 'bulk_density' in df.columns:
+        # Convert from cg/cm³ to g/cm³ by dividing by 100
+        df['bulk_density'] = df['bulk_density'] / 100.0
+        print(f"Converted bulk density from cg/cm³ to g/cm³")
+    
+    # Nitrogen content is in cg/kg (centigrams per kilogram)
+    if 'nitrogen_data_points' in file_name and 'nitrogen_content' in df.columns:
+        # Convert from cg/kg to g/kg by dividing by 100
+        df['nitrogen_content'] = df['nitrogen_content'] / 100.0
+        print(f"Converted nitrogen content from cg/kg to g/kg")
+    
+    # Coarse fragments are in promille (‰) - no conversion needed
+    if 'coarse_fragments_data_points' in file_name and 'coarse_fragments' in df.columns:
+        print(f"Coarse fragments in promille (‰) - no conversion needed")
+    
+    # Cation exchange capacity is in mmol(c)/kg - no conversion needed
+    if 'cec_data_points' in file_name and 'cation_exchange_capacity' in df.columns:
+        print(f"CEC in mmol(c)/kg - no conversion needed")
+    
+    # Soil carbon stock is in tonnes C/ha - no conversion needed for now
+    if 'soil_carbon_points' in file_name and 'soil_carbon_stock' in df.columns:
+        print(f"Soil carbon stock in tonnes C/ha - no conversion needed")
+    
+    # Clay, silt, sand content are in g/kg - could convert to percentage
+    for texture in ['clay_content', 'silt_content', 'sand_content']:
+        if texture in df.columns:
+            # Convert from g/kg to percentage by dividing by 10
+            df[texture] = df[texture] / 10.0
+            print(f"Converted {texture} from g/kg to percentage")
+    
+    # Add data source identifier
+    df['data_source'] = 'soilgrids'
+    
+    return df
+
+def process_soil_moisture_data(df, file_path):
+    """Process soil moisture data with appropriate column naming."""
+    # Ensure consistent lat/lon column names
+    if 'latitude' in df.columns and 'longitude' in df.columns:
+        df.rename(columns={'latitude': 'lat', 'longitude': 'lon'}, inplace=True)
+    
+    # Soil moisture is already in volumetric water content (fraction)
+    # Values typically range from 0.0 to 1.0, but more commonly 0.1 to 0.5
+    if 'soil_moisture' in df.columns:
+        print(f"Soil moisture in volumetric water content (fraction) - no conversion needed")
+    
+    # Add data source identifier
+    df['data_source'] = 'soil_moisture'
+    
+    return df
+
+def process_elevation_data(df, file_path):
+    """Process elevation data with appropriate column naming."""
+    # Ensure consistent lat/lon column names
+    if 'latitude' in df.columns and 'longitude' in df.columns:
+        df.rename(columns={'latitude': 'lat', 'longitude': 'lon'}, inplace=True)
+    
+    # Elevation is in meters above sea level
+    if 'elevation' in df.columns:
+        print(f"Elevation in meters above sea level - no conversion needed")
+    
+    # Add data source identifier
+    df['data_source'] = 'elevation'
+    
+    return df
+
+def detect_statistical_outliers(df, column='BNPP', method='iqr', multiplier=1.5):
+    """
+    Detect statistical outliers in BNPP data using various methods.
+    
+    Args:
+        df: DataFrame with BNPP data
+        column: Column name to check for outliers (default: 'BNPP')
+        method: Method for outlier detection ('iqr', 'z_score', 'modified_z_score')
+        multiplier: Multiplier for outlier threshold (default: 1.5 for IQR, 3 for z-score)
+    
+    Returns:
+        pandas.Series: Boolean mask indicating outliers (True = outlier)
+    """
+    if column not in df.columns:
+        print(f"Warning: Column '{column}' not found in DataFrame")
+        return pd.Series([False] * len(df))
+    
+    values = df[column].dropna()
+    if len(values) == 0:
+        print(f"Warning: No valid values found in column '{column}'")
+        return pd.Series([False] * len(df))
+    
+    outliers = pd.Series([False] * len(df), index=df.index)
+    
+    if method == 'iqr':
+        # Interquartile Range (IQR) method
+        Q1 = values.quantile(0.25)
+        Q3 = values.quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - multiplier * IQR
+        upper_bound = Q3 + multiplier * IQR
+        
+        outliers = (df[column] < lower_bound) | (df[column] > upper_bound)
+        print(f"IQR outlier detection: bounds [{lower_bound:.2f}, {upper_bound:.2f}]")
+        
+    elif method == 'z_score':
+        # Z-score method
+        if multiplier == 1.5:  # Default was for IQR, adjust for z-score
+            multiplier = 3.0
+        
+        mean_val = values.mean()
+        std_val = values.std()
+        z_scores = np.abs((df[column] - mean_val) / std_val)
+        outliers = z_scores > multiplier
+        print(f"Z-score outlier detection: threshold {multiplier}, mean={mean_val:.2f}, std={std_val:.2f}")
+        
+    elif method == 'modified_z_score':
+        # Modified Z-score using median absolute deviation (MAD)
+        if multiplier == 1.5:  # Default was for IQR, adjust for modified z-score
+            multiplier = 3.5
+        
+        median_val = values.median()
+        mad = np.median(np.abs(values - median_val))
+        modified_z_scores = 0.6745 * (df[column] - median_val) / mad
+        outliers = np.abs(modified_z_scores) > multiplier
+        print(f"Modified Z-score outlier detection: threshold {multiplier}, median={median_val:.2f}, MAD={mad:.2f}")
+    
+    else:
+        print(f"Warning: Unknown outlier detection method '{method}'. Using IQR method.")
+        return detect_statistical_outliers(df, column, method='iqr', multiplier=multiplier)
+    
+    return outliers
+
+def detect_domain_outliers(df, column='BNPP', data_source_col='data_source'):
+    """
+    Detect domain-specific outliers based on biological/ecological knowledge.
+    
+    Args:
+        df: DataFrame with BNPP data
+        column: Column name to check for outliers (default: 'BNPP')
+        data_source_col: Column indicating data source (forest vs grassland)
+    
+    Returns:
+        pandas.Series: Boolean mask indicating outliers (True = outlier)
+    """
+    if column not in df.columns:
+        print(f"Warning: Column '{column}' not found in DataFrame")
+        return pd.Series([False] * len(df))
+    
+    outliers = pd.Series([False] * len(df), index=df.index)
+    
+    # Domain-specific thresholds based on ecological literature
+    # Units: g C m⁻² yr⁻¹
+    domain_thresholds = {
+        'forest': {
+            'min': 0,      # Minimum: 0 g C m⁻² yr⁻¹
+            'max': 2000,   # Maximum: ~2000 g C m⁻² yr⁻¹ (very productive forests)
+            'typical_max': 1500  # Typical maximum for most forests
+        },
+        'grassland': {
+            'min': 0,      # Minimum: 0 g C m⁻² yr⁻¹
+            'max': 1000,   # Maximum: ~1000 g C m⁻² yr⁻¹ (very productive grasslands)
+            'typical_max': 800   # Typical maximum for most grasslands
+        },
+        'general': {
+            'min': 0,      # Minimum: 0 g C m⁻² yr⁻¹
+            'max': 2500,   # Conservative maximum across all ecosystems
+            'typical_max': 2000
+        }
+    }
+    
+    # Check for negative values (always outliers)
+    negative_outliers = df[column] < 0
+    outliers = outliers | negative_outliers
+    
+    # Check for extremely high values
+    if data_source_col in df.columns:
+        # Apply ecosystem-specific thresholds
+        for ecosystem in ['forest', 'grassland']:
+            mask = df[data_source_col] == ecosystem
+            if mask.any():
+                thresholds = domain_thresholds[ecosystem]
+                ecosystem_outliers = (df[column] > thresholds['max']) & mask
+                outliers = outliers | ecosystem_outliers
+                
+                print(f"{ecosystem.capitalize()} outliers: {ecosystem_outliers.sum()} points > {thresholds['max']} g C m⁻² yr⁻¹")
+    else:
+        # Apply general thresholds
+        thresholds = domain_thresholds['general']
+        high_outliers = df[column] > thresholds['max']
+        outliers = outliers | high_outliers
+        print(f"General outliers: {high_outliers.sum()} points > {thresholds['max']} g C m⁻² yr⁻¹")
+    
+    if negative_outliers.any():
+        print(f"Negative value outliers: {negative_outliers.sum()} points < 0 g C m⁻² yr⁻¹")
+    
+    return outliers
+
+def detect_geographic_outliers(df, column='BNPP', lat_col='lat', lon_col='lon'):
+    """
+    Detect geographic outliers by checking for unusual values in specific regions.
+    
+    Args:
+        df: DataFrame with BNPP data
+        column: Column name to check for outliers (default: 'BNPP')
+        lat_col: Latitude column name
+        lon_col: Longitude column name
+    
+    Returns:
+        pandas.Series: Boolean mask indicating outliers (True = outlier)
+    """
+    if not all(col in df.columns for col in [column, lat_col, lon_col]):
+        print(f"Warning: Required columns not found in DataFrame")
+        return pd.Series([False] * len(df))
+    
+    outliers = pd.Series([False] * len(df), index=df.index)
+    
+    # Define geographic regions with expected BNPP ranges
+    regions = {
+        'arctic': {'lat_min': 60, 'lat_max': 90, 'max_bnpp': 200},
+        'tropical': {'lat_min': -23.5, 'lat_max': 23.5, 'max_bnpp': 2000},
+        'temperate': {'lat_min': 23.5, 'lat_max': 60, 'max_bnpp': 1500},
+        'southern_temperate': {'lat_min': -60, 'lat_max': -23.5, 'max_bnpp': 1500},
+        'antarctic': {'lat_min': -90, 'lat_max': -60, 'max_bnpp': 100}
+    }
+    
+    for region_name, bounds in regions.items():
+        # Identify points in this region
+        in_region = (df[lat_col] >= bounds['lat_min']) & (df[lat_col] <= bounds['lat_max'])
+        
+        if in_region.any():
+            # Check for values exceeding regional maximum
+            region_outliers = (df[column] > bounds['max_bnpp']) & in_region
+            outliers = outliers | region_outliers
+            
+            if region_outliers.any():
+                print(f"{region_name.capitalize()} region outliers: {region_outliers.sum()} points > {bounds['max_bnpp']} g C m⁻² yr⁻¹")
+    
+    return outliers
+
+def visualize_outliers(df, column='BNPP', outlier_methods=['iqr', 'domain'], output_dir='../productivity/earth'):
+    """
+    Create visualizations to show detected outliers.
+    
+    Args:
+        df: DataFrame with BNPP data
+        column: Column name to visualize (default: 'BNPP')
+        outlier_methods: List of outlier detection methods to apply
+        output_dir: Directory to save visualizations
+    """
+    if column not in df.columns:
+        print(f"Warning: Column '{column}' not found in DataFrame")
+        return
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Detect outliers using different methods
+    outlier_masks = {}
+    for method in outlier_methods:
+        if method == 'iqr':
+            outlier_masks[method] = detect_statistical_outliers(df, column, method='iqr')
+        elif method == 'z_score':
+            outlier_masks[method] = detect_statistical_outliers(df, column, method='z_score')
+        elif method == 'modified_z_score':
+            outlier_masks[method] = detect_statistical_outliers(df, column, method='modified_z_score')
+        elif method == 'domain':
+            outlier_masks[method] = detect_domain_outliers(df, column)
+        elif method == 'geographic':
+            outlier_masks[method] = detect_geographic_outliers(df, column)
+    
+    # Create combined outlier mask
+    combined_outliers = pd.Series([False] * len(df), index=df.index)
+    for mask in outlier_masks.values():
+        combined_outliers = combined_outliers | mask
+    
+    # Create visualization
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    
+    # 1. Histogram with outliers highlighted
+    ax1 = axes[0, 0]
+    values = df[column].dropna()
+    ax1.hist(values, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+    
+    # Highlight outliers
+    for method, mask in outlier_masks.items():
+        outlier_values = df.loc[mask, column].dropna()
+        if len(outlier_values) > 0:
+            ax1.hist(outlier_values, bins=50, alpha=0.8, 
+                    label=f'{method} outliers ({len(outlier_values)})', 
+                    histtype='step', linewidth=2)
+    
+    ax1.set_xlabel(f'{column} (g C m⁻² yr⁻¹)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('BNPP Distribution with Outliers')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Box plot with outliers
+    ax2 = axes[0, 1]
+    bp = ax2.boxplot(values, patch_artist=True)
+    bp['boxes'][0].set_facecolor('lightblue')
+    ax2.set_ylabel(f'{column} (g C m⁻² yr⁻¹)')
+    ax2.set_title('BNPP Box Plot')
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. Scatter plot: BNPP vs Latitude
+    ax3 = axes[1, 0]
+    if 'lat' in df.columns:
+        # Plot normal points
+        normal_mask = ~combined_outliers
+        ax3.scatter(df.loc[normal_mask, 'lat'], df.loc[normal_mask, column], 
+                   alpha=0.6, s=30, color='blue', label='Normal')
+        
+        # Plot outliers
+        if combined_outliers.any():
+            ax3.scatter(df.loc[combined_outliers, 'lat'], df.loc[combined_outliers, column], 
+                       alpha=0.8, s=50, color='red', marker='x', label='Outliers')
+        
+        ax3.set_xlabel('Latitude')
+        ax3.set_ylabel(f'{column} (g C m⁻² yr⁻¹)')
+        ax3.set_title('BNPP vs Latitude')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+    
+    # 4. Geographic distribution of outliers
+    ax4 = axes[1, 1]
+    if 'lat' in df.columns and 'lon' in df.columns:
+        # Plot normal points
+        normal_mask = ~combined_outliers
+        ax4.scatter(df.loc[normal_mask, 'lon'], df.loc[normal_mask, 'lat'], 
+                   alpha=0.6, s=30, color='blue', label='Normal')
+        
+        # Plot outliers
+        if combined_outliers.any():
+            ax4.scatter(df.loc[combined_outliers, 'lon'], df.loc[combined_outliers, 'lat'], 
+                       alpha=0.8, s=50, color='red', marker='x', label='Outliers')
+        
+        ax4.set_xlabel('Longitude')
+        ax4.set_ylabel('Latitude')
+        ax4.set_title('Geographic Distribution of Outliers')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save visualization
+    output_path = os.path.join(output_dir, f'{column}_outlier_analysis.pdf')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"Outlier analysis saved to: {output_path}")
+    
+    # Print summary statistics
+    print(f"\nOutlier Detection Summary for {column}:")
+    print(f"Total data points: {len(df)}")
+    print(f"Valid {column} values: {len(values)}")
+    
+    for method, mask in outlier_masks.items():
+        outlier_count = mask.sum()
+        outlier_percentage = (outlier_count / len(df)) * 100
+        print(f"{method.upper()} outliers: {outlier_count} ({outlier_percentage:.1f}%)")
+    
+    combined_count = combined_outliers.sum()
+    combined_percentage = (combined_count / len(df)) * 100
+    print(f"Combined outliers: {combined_count} ({combined_percentage:.1f}%)")
+    
+    plt.show()
+
+def remove_outliers(df, column='BNPP', methods=['iqr', 'domain'], remove_method='union'):
+    """
+    Remove outliers from the dataset based on specified methods.
+    
+    Args:
+        df: DataFrame with BNPP data
+        column: Column name to check for outliers (default: 'BNPP')
+        methods: List of outlier detection methods to apply
+        remove_method: How to combine multiple methods ('union' or 'intersection')
+    
+    Returns:
+        tuple: (cleaned_df, outlier_df, outlier_summary)
+    """
+    if column not in df.columns:
+        print(f"Warning: Column '{column}' not found in DataFrame")
+        return df, pd.DataFrame(), {}
+    
+    # Detect outliers using different methods
+    outlier_masks = {}
+    for method in methods:
+        if method == 'iqr':
+            outlier_masks[method] = detect_statistical_outliers(df, column, method='iqr')
+        elif method == 'z_score':
+            outlier_masks[method] = detect_statistical_outliers(df, column, method='z_score')
+        elif method == 'modified_z_score':
+            outlier_masks[method] = detect_statistical_outliers(df, column, method='modified_z_score')
+        elif method == 'domain':
+            outlier_masks[method] = detect_domain_outliers(df, column)
+        elif method == 'geographic':
+            outlier_masks[method] = detect_geographic_outliers(df, column)
+    
+    # Combine outlier masks
+    if remove_method == 'union':
+        # Remove points that are outliers in any method
+        combined_outliers = pd.Series([False] * len(df), index=df.index)
+        for mask in outlier_masks.values():
+            combined_outliers = combined_outliers | mask
+    elif remove_method == 'intersection':
+        # Remove points that are outliers in all methods
+        combined_outliers = pd.Series([True] * len(df), index=df.index)
+        for mask in outlier_masks.values():
+            combined_outliers = combined_outliers & mask
+    else:
+        print(f"Warning: Unknown remove_method '{remove_method}'. Using 'union'.")
+        combined_outliers = pd.Series([False] * len(df), index=df.index)
+        for mask in outlier_masks.values():
+            combined_outliers = combined_outliers | mask
+    
+    # Split data into clean and outlier datasets
+    cleaned_df = df[~combined_outliers].copy()
+    outlier_df = df[combined_outliers].copy()
+    
+    # Create summary
+    outlier_summary = {
+        'original_count': len(df),
+        'outlier_count': combined_outliers.sum(),
+        'cleaned_count': len(cleaned_df),
+        'outlier_percentage': (combined_outliers.sum() / len(df)) * 100,
+        'methods_used': methods,
+        'remove_method': remove_method
+    }
+    
+    # Add method-specific counts
+    for method, mask in outlier_masks.items():
+        outlier_summary[f'{method}_outliers'] = mask.sum()
+    
+    print(f"\nOutlier Removal Summary:")
+    print(f"Original dataset: {outlier_summary['original_count']} points")
+    print(f"Outliers removed: {outlier_summary['outlier_count']} points ({outlier_summary['outlier_percentage']:.1f}%)")
+    print(f"Cleaned dataset: {outlier_summary['cleaned_count']} points")
+    print(f"Methods used: {', '.join(methods)}")
+    print(f"Combination method: {remove_method}")
+    
+    return cleaned_df, outlier_df, outlier_summary
+
 def merge_datasets_by_location(productivity_df, climate_df, tolerance=0.1):
     """
     Merge productivity and climate datasets based on lat/lon coordinates.
@@ -245,6 +702,18 @@ def aggregate_data(data_files=[]):
                 # GLASS GPP data processing
                 df = process_glass_data(df, file_path)
                 climate_dataframes.append(df)
+            elif 'soilgrids' in str(file_path):
+                # SoilGrids soil data processing
+                df = process_soilgrids_data(df, file_path)
+                climate_dataframes.append(df)
+            elif 'soil_moisture' in str(file_path):
+                # Soil moisture data processing
+                df = process_soil_moisture_data(df, file_path)
+                climate_dataframes.append(df)
+            elif 'elevation' in str(file_path):
+                # Elevation data processing
+                df = process_elevation_data(df, file_path)
+                climate_dataframes.append(df)
             else:
                 # Productivity data processing (grassland/forest)
                 df = process_productivity_data(df)
@@ -268,7 +737,7 @@ def aggregate_data(data_files=[]):
     if climate_dataframes and integrated_df is not None:
         print("Merging climate variables with productivity data...")
         
-        # Process each climate variable separately to avoid complex merges
+        # Process each climate/environmental variable separately to avoid complex merges
         for df in climate_dataframes:
             # Get the variable name from the dataframe columns
             var_cols = [col for col in df.columns if col not in ['lat', 'lon', 'point_name', 'units', 'data_source', 'date', 'product']]
@@ -281,14 +750,14 @@ def aggregate_data(data_files=[]):
                 for idx, row in integrated_df.iterrows():
                     prod_lat, prod_lon = row['lat'], row['lon']
                     
-                    # Find matching climate data point
-                    climate_match = df[
+                    # Find matching environmental data point
+                    env_match = df[
                         (abs(df['lat'] - prod_lat) < 0.01) & 
                         (abs(df['lon'] - prod_lon) < 0.01)
                     ]
                     
-                    if not climate_match.empty:
-                        integrated_df.at[idx, var_name] = climate_match.iloc[0][var_name]
+                    if not env_match.empty:
+                        integrated_df.at[idx, var_name] = env_match.iloc[0][var_name]
                         matched_count += 1
                     else:
                         integrated_df.at[idx, var_name] = np.nan
@@ -323,7 +792,13 @@ def aggregate_data(data_files=[]):
             print("Warning: No productivity column found. Looking for numeric columns...")
             # Fallback: look for numeric columns that might represent productivity
             numeric_cols = integrated_df.select_dtypes(include=[np.number]).columns
-            potential_prod_cols = [col for col in numeric_cols if col not in ['lat', 'lon', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly', 'Entry_ID', 'Altitude', 'Sampling year', 'BNPP_SE', 'MAT', 'MAP', 'stand.age', 'masl']]
+            potential_prod_cols = [col for col in numeric_cols if col not in [
+                'lat', 'lon', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly', 
+                'Entry_ID', 'Altitude', 'Sampling year', 'BNPP_SE', 'MAT', 'MAP', 'stand.age', 'masl',
+                'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content', 
+                'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water', 
+                'bulk_density', 'coarse_fragments', 'soil_moisture'
+            ]]
             if potential_prod_cols:
                 essential_columns.extend(potential_prod_cols[:1])  # Take first one
                 print(f"Using {potential_prod_cols[0]} as productivity measure")
@@ -331,6 +806,22 @@ def aggregate_data(data_files=[]):
         # Add climate variables
         climate_cols = [col for col in integrated_df.columns if col in ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly']]
         essential_columns.extend(climate_cols)
+        
+        # Add soil variables
+        soil_cols = [col for col in integrated_df.columns if col in [
+            'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content', 
+            'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water', 
+            'bulk_density', 'coarse_fragments'
+        ]]
+        essential_columns.extend(soil_cols)
+        
+        # Add soil moisture variable
+        soil_moisture_cols = [col for col in integrated_df.columns if col in ['soil_moisture']]
+        essential_columns.extend(soil_moisture_cols)
+        
+        # Add elevation variable
+        elevation_cols = [col for col in integrated_df.columns if col in ['elevation']]
+        essential_columns.extend(elevation_cols)
         
         # Add data source identifier
         if 'data_source' in integrated_df.columns:
@@ -463,27 +954,114 @@ def main():
                                 '../ancillary/terraclimate/point_extractions/tmax_means.csv',
                                 '../ancillary/terraclimate/point_extractions/tmin_means.csv',
                                 '../ancillary/terraclimate/point_extractions/vpd_means.csv',
-                                '../ancillary/glass/point_extractions/GPP_YEARLY_all_points.csv'],
-                       help='List of data files to aggregate (default: grassland, forest, terraclimate, and GLASS GPP files)')
+                                '../ancillary/glass/point_extractions/GPP_YEARLY_all_points.csv',
+                                '../ancillary/soilgrids/soil_carbon_points.csv',
+                                '../ancillary/soilgrids/clay_data_points.csv',
+                                '../ancillary/soilgrids/silt_data_points.csv',
+                                '../ancillary/soilgrids/sand_data_points.csv',
+                                '../ancillary/soilgrids/nitrogen_data_points.csv',
+                                '../ancillary/soilgrids/cec_data_points.csv',
+                                '../ancillary/soilgrids/ph_data_points.csv',
+                                '../ancillary/soilgrids/bulk_density_data_points.csv',
+                                '../ancillary/soilgrids/coarse_fragments_data_points.csv',
+                                '../ancillary/soilmoisture/soil_moisture_points.csv',
+                                '../ancillary/elevation_points.csv'],
+                       help='List of data files to aggregate (default: grassland, forest, terraclimate, GLASS GPP, SoilGrids, soil moisture, and elevation files)')
     parser.add_argument('--no-plot', action='store_true',
                        help='Skip plotting the data distribution')
     parser.add_argument('--output-dir', '-o', type=str, default='../productivity',
                        help='Output directory for processed data (default: ../productivity)')
+    
+    # Outlier detection arguments
+    parser.add_argument('--detect-outliers', action='store_true',
+                       help='Enable outlier detection and visualization')
+    parser.add_argument('--remove-outliers', action='store_true',
+                       help='Remove detected outliers from the dataset')
+    parser.add_argument('--outlier-methods', nargs='+', 
+                       default=['iqr', 'domain'],
+                       choices=['iqr', 'z_score', 'modified_z_score', 'domain', 'geographic'],
+                       help='Outlier detection methods to use (default: iqr, domain)')
+    parser.add_argument('--outlier-combination', type=str, default='union',
+                       choices=['union', 'intersection'],
+                       help='How to combine multiple outlier detection methods (default: union)')
+    parser.add_argument('--bnpp-column', type=str, default='BNPP',
+                       help='Column name for BNPP data (default: BNPP)')
     
     args = parser.parse_args()
     
     try:
         # Aggregate data from the specified files
         integrated_data = aggregate_data(args.files)
-        # Check if the integrated DataFrame is not empty and plot the data distribution
+        
+        # Check if the integrated DataFrame is not empty
         if not integrated_data.empty:
             print(f"Integrated DataFrame shape: {integrated_data.shape}")
+            print(f"Columns: {list(integrated_data.columns)}")
             print(integrated_data.head())
+            
+            # Outlier detection and handling
+            if args.detect_outliers or args.remove_outliers:
+                if args.bnpp_column in integrated_data.columns:
+                    print(f"\n{'='*60}")
+                    print("OUTLIER DETECTION AND ANALYSIS")
+                    print('='*60)
+                    
+                    # Visualize outliers
+                    if args.detect_outliers:
+                        print("Creating outlier visualizations...")
+                        output_dir = Path(args.output_dir) / 'earth'
+                        visualize_outliers(integrated_data, 
+                                         column=args.bnpp_column,
+                                         outlier_methods=args.outlier_methods,
+                                         output_dir=str(output_dir))
+                    
+                    # Remove outliers if requested
+                    if args.remove_outliers:
+                        print("Removing outliers from dataset...")
+                        cleaned_data, outlier_data, outlier_summary = remove_outliers(
+                            integrated_data,
+                            column=args.bnpp_column,
+                            methods=args.outlier_methods,
+                            remove_method=args.outlier_combination
+                        )
+                        
+                        # Save cleaned and outlier datasets
+                        output_dir = Path(args.output_dir) / 'earth'
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Save cleaned dataset
+                        cleaned_file = output_dir / 'aggregated_data_cleaned.csv'
+                        cleaned_data.to_csv(cleaned_file, index=False)
+                        print(f"Cleaned dataset saved to: {cleaned_file}")
+                        
+                        # Save outliers dataset
+                        outlier_file = output_dir / 'outliers_removed.csv'
+                        outlier_data.to_csv(outlier_file, index=False)
+                        print(f"Outliers dataset saved to: {outlier_file}")
+                        
+                        # Save outlier summary
+                        summary_file = output_dir / 'outlier_summary.txt'
+                        with open(summary_file, 'w') as f:
+                            f.write("BNPP Outlier Detection Summary\n")
+                            f.write("=" * 40 + "\n\n")
+                            for key, value in outlier_summary.items():
+                                f.write(f"{key}: {value}\n")
+                        print(f"Outlier summary saved to: {summary_file}")
+                        
+                        # Use cleaned data for further processing
+                        integrated_data = cleaned_data
+                        print(f"Proceeding with cleaned dataset: {len(integrated_data)} points")
+                    
+                else:
+                    print(f"Warning: BNPP column '{args.bnpp_column}' not found in integrated data.")
+                    print(f"Available columns: {list(integrated_data.columns)}")
+            
             # Plot the integrated data if needed
             if not args.no_plot:
                 plot_data_distribution(integrated_data)
         else:
             print("No data to display.")
+            
     except Exception as e:
         print(f"An error occurred during data integration: {str(e)}")
 
