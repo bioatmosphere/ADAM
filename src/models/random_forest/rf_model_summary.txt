@@ -1,0 +1,35 @@
+Random Forest Model Summary
+========================================
+
+Dataset size: 1420 samples
+Features: 18
+Geographic features (lat, lon) excluded from training
+Training samples: 1136
+Test samples: 284
+
+Model Performance:
+Training R²: 0.7639
+Test R²: 0.5382
+Training RMSE: 131.32 g C m⁻² yr⁻¹
+Test RMSE: 185.13 g C m⁻² yr⁻¹
+Training MAE: 84.77 g C m⁻² yr⁻¹
+Test MAE: 125.19 g C m⁻² yr⁻¹
+
+Best Hyperparameters:
+max_depth: None
+max_features: sqrt
+min_samples_leaf: 1
+min_samples_split: 2
+n_estimators: 200
+
+Feature Importance (Top 10):
+vpd: 0.0756
+elevation: 0.0744
+bulk_density: 0.0713
+pet: 0.0694
+tmin: 0.0644
+tmax: 0.0631
+sand_content: 0.0591
+ppt: 0.0574
+aet: 0.0549
+coarse_fragments: 0.0536

@@ -1,0 +1,27 @@
+AutoGluon AutoML Model Summary
+==================================================
+
+Performance Metrics:
+--------------------
+Training R²: 0.7682
+Test R²: 0.5340
+Training RMSE: 130.1184 g C m⁻² yr⁻¹
+Test RMSE: 185.9755 g C m⁻² yr⁻¹
+Training MAE: 82.5829 g C m⁻² yr⁻¹
+Test MAE: 122.6526 g C m⁻² yr⁻¹
+Training Time: 282.17 seconds
+
+Model Information:
+--------------------
+AutoML Framework: AutoGluon
+Problem Type: Regression
+Metric: Root Mean Squared Error
+Auto-stacking: Enabled
+Quality Preset: good_quality
+
+Best Model Info:
+--------------------
+Best Model: WeightedEnsemble_L2
+Score: -183.5787
+Fit Time: 56.31s
+Predict Time: 0.1091s

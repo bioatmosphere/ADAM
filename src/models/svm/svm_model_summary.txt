@@ -1,0 +1,63 @@
+Support Vector Machine (SVM) Model Summary
+==================================================
+
+Model Parameters:
+--------------------
+C: 10
+cache_size: 200
+coef0: 0.0
+degree: 3
+epsilon: 0.1
+gamma: scale
+kernel: rbf
+max_iter: -1
+shrinking: True
+tol: 0.001
+verbose: False
+
+Preprocessing:
+--------------------
+Feature scaling: StandardScaler applied
+Scaler mean: [4.84913762e+01 8.17619506e+01 7.17407827e+01 1.61817434e+01
+ 4.72568251e+00 6.66956059e-01 1.07216367e+03 5.47464789e+01
+ 2.40412852e+01 3.43897007e+01 4.20737676e+01 4.89985915e+00
+ 2.72555458e+02 6.20660211e+00 1.16121479e+00 9.90580986e+01
+ 2.44760534e-01 7.42568662e+02]
+Scaler scale: [2.18700513e+01 3.09633094e+01 4.79390210e+01 8.51188796e+00
+ 8.19234055e+00 3.53338566e-01 7.50452480e+02 2.18770771e+01
+ 9.87646556e+00 1.01346355e+01 1.44593918e+01 3.20163520e+00
+ 1.19109476e+02 1.07066374e+00 2.46294588e-01 6.45318608e+01
+ 4.65752647e-02 8.38313198e+02]
+
+Performance Metrics:
+--------------------
+Training R²: 0.1073
+Test R²: 0.1074
+Training RMSE: 255.3570 g C m⁻² yr⁻¹
+Test RMSE: 257.3983 g C m⁻² yr⁻¹
+Training MAE: 163.6828 g C m⁻² yr⁻¹
+Test MAE: 161.7062 g C m⁻² yr⁻¹
+Training Time: 0.02 seconds
+
+Feature Information:
+--------------------
+Number of features: 18
+Features used:
+ 1. aet
+ 2. pet
+ 3. ppt
+ 4. tmax
+ 5. tmin
+ 6. vpd
+ 7. gpp_yearly
+ 8. soil_carbon_stock
+ 9. clay_content
+10. silt_content
+11. sand_content
+12. nitrogen_content
+13. cation_exchange_capacity
+14. ph_in_water
+15. bulk_density
+16. coarse_fragments
+17. soil_moisture
+18. elevation

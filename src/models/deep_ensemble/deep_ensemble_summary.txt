@@ -1,0 +1,53 @@
+Deep Ensemble Model Summary
+==================================================
+
+Ensemble Architecture:
+- Deep Network (4 layers, 256→128→64→32)
+- Wide Network (2 layers, 512→256)
+- Residual Network (3 residual blocks, 128 units)
+- Attention Network (Multi-head attention, 4 heads)
+- Simple Network (2 layers, 64→32)
+
+Ensemble Performance:
+Training R²: 0.4047
+Validation R²: 0.3931
+Test R²: 0.3384
+Training RMSE: 210.2009
+Validation RMSE: 203.6426
+Test RMSE: 221.5911
+Training MAE: 147.5256
+Validation MAE: 147.7318
+Test MAE: 153.3521
+
+Uncertainty Statistics:
+Mean uncertainty: 65.2214
+Std uncertainty: 54.5166
+
+Dataset Information:
+Number of features: 18
+Training samples: 908
+Validation samples: 228
+Test samples: 284
+Number of models: 5
+
+Individual Model Performance:
+Deep Network:
+  Test R²: 0.3274
+  Test RMSE: 223.4373
+  Test MAE: 148.8244
+Wide Network:
+  Test R²: 0.2141
+  Test RMSE: 241.5211
+  Test MAE: 169.4525
+Residual Network:
+  Test R²: 0.3249
+  Test RMSE: 223.8389
+  Test MAE: 144.5331
+Attention Network:
+  Test R²: 0.1489
+  Test RMSE: 251.3294
+  Test MAE: 177.0865
+Simple Network:
+  Test R²: 0.1901
+  Test RMSE: 245.1849
+  Test MAE: 171.1793

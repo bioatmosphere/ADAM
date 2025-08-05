@@ -1,0 +1,40 @@
+Elastic Net Model Summary
+==================================================
+
+Model Performance:
+Training R²: 0.1750
+Test R²: 0.1767
+Training RMSE: 245.4876
+Test RMSE: 247.1912
+Training MAE: 178.7877
+Test MAE: 174.8340
+
+Dataset Information:
+Number of features: 18
+Features selected: 18
+Training samples: 1136
+Test samples: 284
+
+Model Parameters:
+Alpha (regularization): 0.088227
+L1 ratio: 0.9000
+
+Feature Coefficients:
+tmax: 86.976495
+sand_content: -86.250953
+aet: 70.306226
+bulk_density: 57.679334
+silt_content: -55.365140
+soil_moisture: -55.332443
+clay_content: -54.417388
+vpd: -49.751548
+ppt: -36.174812
+soil_carbon_stock: 34.751548
+elevation: 27.717260
+gpp_yearly: -26.790725
+pet: -19.471688
+ph_in_water: 17.464419
+nitrogen_content: 13.408130
+tmin: -9.378428
+coarse_fragments: -7.323834
+cation_exchange_capacity: -3.974920

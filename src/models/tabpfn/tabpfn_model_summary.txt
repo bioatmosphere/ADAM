@@ -1,0 +1,30 @@
+TabPFN Model Summary
+==================================================
+
+Model Type: Prior-Fitted Networks (TabPFN)
+Pre-trained transformer for tabular data
+
+Model Performance (Single Split):
+Training R²: 0.7709
+Test R²: 0.4840
+Training RMSE: 133.3087
+Test RMSE: 204.0732
+Training MAE: 86.2612
+Test MAE: 143.8961
+Fit time: 0.04 seconds
+
+Cross-Validation Results:
+R² = 0.0000 ± 0.0000
+RMSE = 0.00 ± 0.00
+MAE = 0.00 ± 0.00
+
+Dataset Information:
+Number of features: 18
+Training samples: 800
+Test samples: 200
+
+Model Characteristics:
+- Pre-trained on synthetic tabular data
+- Zero-shot learning (no training required)
+- Optimized for small datasets (< 3000 samples)
+- Transformer-based architecture

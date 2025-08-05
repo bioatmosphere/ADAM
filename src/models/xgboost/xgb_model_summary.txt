@@ -1,0 +1,35 @@
+XGBoost Model Summary
+==================================================
+
+Model Performance:
+Training R²: 0.7853
+Test R²: 0.5047
+Training RMSE: 125.2270
+Test RMSE: 191.7347
+Training MAE: 75.5405
+Test MAE: 127.3875
+
+Dataset Information:
+Number of features: 18
+Training samples: 1136
+Test samples: 284
+
+Feature Importances:
+bulk_density: 0.1939
+ph_in_water: 0.0656
+sand_content: 0.0629
+silt_content: 0.0625
+elevation: 0.0613
+tmin: 0.0568
+ppt: 0.0568
+clay_content: 0.0525
+coarse_fragments: 0.0498
+soil_moisture: 0.0492
+soil_carbon_stock: 0.0462
+gpp_yearly: 0.0422
+vpd: 0.0422
+pet: 0.0409
+tmax: 0.0360
+cation_exchange_capacity: 0.0296
+nitrogen_content: 0.0282
+aet: 0.0233

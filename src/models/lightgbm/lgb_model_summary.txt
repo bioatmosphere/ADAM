@@ -1,0 +1,35 @@
+LightGBM Model Summary
+==================================================
+
+Model Performance:
+Training R²: 0.7834
+Test R²: 0.5005
+Training RMSE: 125.7898
+Test RMSE: 192.5394
+Training MAE: 75.7596
+Test MAE: 127.5361
+
+Dataset Information:
+Number of features: 18
+Training samples: 1136
+Test samples: 284
+
+Feature Importances:
+elevation: 580.0000
+pet: 508.0000
+aet: 505.0000
+soil_carbon_stock: 483.0000
+tmax: 470.0000
+gpp_yearly: 470.0000
+nitrogen_content: 443.0000
+sand_content: 440.0000
+coarse_fragments: 439.0000
+silt_content: 422.0000
+tmin: 420.0000
+clay_content: 403.0000
+soil_moisture: 403.0000
+ppt: 392.0000
+vpd: 381.0000
+cation_exchange_capacity: 330.0000
+bulk_density: 318.0000
+ph_in_water: 258.0000

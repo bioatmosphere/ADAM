@@ -1,0 +1,67 @@
+CatBoost Model Summary
+==================================================
+
+Model Parameters:
+--------------------
+iterations: 1000
+learning_rate: 0.05
+depth: 6
+l2_leaf_reg: 3
+loss_function: RMSE
+verbose: False
+random_state: 42
+early_stopping_rounds: 50
+
+Performance Metrics:
+--------------------
+Training R²: 0.7210
+Test R²: 0.5145
+Training RMSE: 142.7501 g C m⁻² yr⁻¹
+Test RMSE: 189.8290 g C m⁻² yr⁻¹
+Training MAE: 98.8903 g C m⁻² yr⁻¹
+Test MAE: 130.3071 g C m⁻² yr⁻¹
+Training Time: 0.22 seconds
+
+Feature Information:
+--------------------
+Number of features: 18
+Features used:
+ 1. aet
+ 2. pet
+ 3. ppt
+ 4. tmax
+ 5. tmin
+ 6. vpd
+ 7. gpp_yearly
+ 8. soil_carbon_stock
+ 9. clay_content
+10. silt_content
+11. sand_content
+12. nitrogen_content
+13. cation_exchange_capacity
+14. ph_in_water
+15. bulk_density
+16. coarse_fragments
+17. soil_moisture
+18. elevation
+
+Feature Importances:
+--------------------
+pet: 7.8023
+sand_content: 7.1512
+bulk_density: 6.7221
+vpd: 6.2058
+soil_moisture: 6.1843
+elevation: 6.1546
+clay_content: 6.0768
+ph_in_water: 6.0121
+ppt: 5.8238
+gpp_yearly: 5.7322
+cation_exchange_capacity: 5.0158
+soil_carbon_stock: 4.9673
+tmin: 4.9151
+coarse_fragments: 4.5990
+silt_content: 4.3670
+nitrogen_content: 4.3570
+aet: 4.2076
+tmax: 3.7060

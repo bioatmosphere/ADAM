@@ -1,0 +1,25 @@
+AutoGluon Model Leaderboard
+==================================================
+
+                          model   score_val  ... can_infer  fit_order
+0           WeightedEnsemble_L2 -183.578718  ...     False          9
+1          ExtraTreesMSE_BAG_L1 -185.488370  ...      True          5
+2               CatBoost_BAG_L1 -186.918820  ...     False          4
+3        RandomForestMSE_BAG_L1 -187.321051  ...      True          3
+4             LightGBMXT_BAG_L1 -190.122974  ...     False          1
+5                XGBoost_BAG_L1 -192.554493  ...     False          6
+6          LightGBMLarge_BAG_L1 -193.803165  ...     False          8
+7               LightGBM_BAG_L1 -194.222568  ...     False          2
+8         NeuralNetTorch_BAG_L1 -199.679987  ...     False          7
+9     ExtraTreesMSE_BAG_L1_FULL         NaN  ...      True         14
+10  RandomForestMSE_BAG_L1_FULL         NaN  ...      True         12
+11          XGBoost_BAG_L1_FULL         NaN  ...      True         15
+12     WeightedEnsemble_L2_FULL         NaN  ...      True         18
+13   NeuralNetTorch_BAG_L1_FULL         NaN  ...      True         16
+14         LightGBM_BAG_L1_FULL         NaN  ...      True         11
+15       LightGBMXT_BAG_L1_FULL         NaN  ...      True         10
+16    LightGBMLarge_BAG_L1_FULL         NaN  ...      True         17
+17         CatBoost_BAG_L1_FULL         NaN  ...      True         13
+
+[18 rows x 10 columns]
+

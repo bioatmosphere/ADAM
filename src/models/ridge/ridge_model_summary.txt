@@ -1,0 +1,68 @@
+Ridge Regression Model Summary
+==================================================
+
+Model Parameters:
+--------------------
+Alpha (regularization): 6.250552
+Fit intercept: True
+Normalize: False (using StandardScaler)
+
+Preprocessing:
+--------------------
+Feature scaling: StandardScaler applied
+Scaler mean shape: (18,)
+Scaler scale shape: (18,)
+
+Performance Metrics:
+--------------------
+Training R²: 0.1966
+Test R²: 0.1520
+Training RMSE: 242.2567 g C m⁻² yr⁻¹
+Test RMSE: 250.8783 g C m⁻² yr⁻¹
+Training MAE: 176.7275 g C m⁻² yr⁻¹
+Test MAE: 178.6317 g C m⁻² yr⁻¹
+Training Time: 0.12 seconds
+
+Feature Information:
+--------------------
+Number of features: 18
+Features used:
+ 1. aet
+ 2. pet
+ 3. ppt
+ 4. tmax
+ 5. tmin
+ 6. vpd
+ 7. gpp_yearly
+ 8. soil_carbon_stock
+ 9. clay_content
+10. silt_content
+11. sand_content
+12. nitrogen_content
+13. cation_exchange_capacity
+14. ph_in_water
+15. bulk_density
+16. coarse_fragments
+17. soil_moisture
+18. elevation
+
+Feature Coefficients:
+--------------------
+sand_content: -131.2758
+tmax: 104.2901
+silt_content: -88.7662
+clay_content: -88.0119
+aet: 76.0163
+vpd: -59.8964
+soil_moisture: -56.1985
+bulk_density: 51.1083
+ppt: -49.9187
+soil_carbon_stock: 43.9961
+gpp_yearly: -43.2243
+elevation: 19.6412
+tmin: -16.8398
+cation_exchange_capacity: -11.4881
+nitrogen_content: 11.4091
+pet: -9.4253
+ph_in_water: 8.6899
+coarse_fragments: -2.3619
