@@ -9,7 +9,7 @@ ADAM is a comprehensive data synthesis and machine learning pipeline for predict
 
 - **Multi-source Data Integration**: Combines forest, grassland, climate, soil, and elevation datasets from global sources
 - **4-Stage Pipeline**: Automated workflow from data retrieval to global application
-- **8 Machine Learning Models**: Comprehensive benchmark suite including Random Forest, XGBoost, MLP, LightGBM, TabNet, TabPFN, Deep Ensemble, and Elastic Net
+- **12 Machine Learning Models**: Comprehensive benchmark suite including tree-based, neural network, linear, and ensemble methods
 - **Advanced Data Cleaning**: Automated outlier detection with multiple statistical methods
 - **Elevation Integration**: SRTM digital elevation model as topographic predictor
 - **Global Predictions**: Applies trained models to worldwide land cover data
@@ -41,12 +41,16 @@ python src/main.py --stage 4  # Global application
 # Train specific models (run from src/models/ directory)
 python RF_model.py             # Random Forest
 python XGBoost_model.py        # XGBoost
-python MLP_model.py            # Multi-Layer Perceptron
 python LightGBM_model.py       # LightGBM
-python ElasticNet_model.py     # Elastic Net
+python CatBoost_model.py       # CatBoost
+python MLP_model.py            # Multi-Layer Perceptron
 python TabNet_model.py         # TabNet
 python TabPFN_model.py         # TabPFN (Prior-Fitted Networks)
 python DeepEnsemble_model.py   # Deep Ensemble
+python ElasticNet_model.py     # Elastic Net
+python Ridge_model.py          # Ridge Regression
+python SVM_model.py            # Support Vector Machine
+python AutoGluon_model.py      # AutoGluon AutoML
 
 # Apply models globally (run from src/models/application/ directory)
 python apply_RF_globally.py       # Random Forest global predictions
@@ -105,26 +109,32 @@ ADAM/
 
 1. **Data Retrieval**: Download and process source datasets
 2. **Data Integration**: Spatially align and merge all data sources with outlier detection
-3. **Machine Learning**: Train 8 machine learning models with comprehensive benchmarking
+3. **Machine Learning**: Train 12 machine learning models with comprehensive benchmarking
 4. **Global Application**: Apply trained models to create worldwide BNPP maps
 
 ## Machine Learning Models
 
-The pipeline implements eight state-of-the-art machine learning models for comprehensive benchmarking:
+The pipeline implements twelve state-of-the-art machine learning models for comprehensive benchmarking:
 
 ### Tree-Based Models
-- **Random Forest (`src/models/RF_model.py`)**: Ensemble method with hyperparameter tuning
-- **XGBoost (`src/models/XGBoost_model.py`)**: Gradient boosting with advanced regularization  
-- **LightGBM (`src/models/LightGBM_model.py`)**: Fast gradient boosting framework
+- **Random Forest (`src/models/RF_model.py`)**: Ensemble method with hyperparameter tuning via GridSearchCV
+- **XGBoost (`src/models/XGBoost_model.py`)**: Gradient boosting with advanced regularization and early stopping
+- **LightGBM (`src/models/LightGBM_model.py`)**: Fast gradient boosting framework optimized for efficiency
+- **CatBoost (`src/models/CatBoost_model.py`)**: Gradient boosting with categorical feature handling
 
 ### Neural Network Models
-- **Multi-Layer Perceptron (`src/models/MLP_model.py`)**: Deep learning with PyTorch
-- **TabNet (`src/models/TabNet_model.py`)**: Attention-based neural network for tabular data
-- **TabPFN (`src/models/TabPFN_model.py`)**: Prior-Fitted Networks with zero-shot learning
-- **Deep Ensemble (`src/models/DeepEnsemble_model.py`)**: Ensemble of neural networks
+- **Multi-Layer Perceptron (`src/models/MLP_model.py`)**: Deep learning with PyTorch and dropout regularization
+- **TabNet (`src/models/TabNet_model.py`)**: Attention-based neural network for tabular data with interpretability
+- **TabPFN (`src/models/TabPFN_model.py`)**: Prior-Fitted Networks with zero-shot learning capabilities
+- **Deep Ensemble (`src/models/DeepEnsemble_model.py`)**: Ensemble of neural networks for uncertainty quantification
 
-### Linear Model
+### Linear and Kernel Models
 - **Elastic Net (`src/models/ElasticNet_model.py`)**: Regularized linear regression with L1/L2 penalties
+- **Ridge Regression (`src/models/Ridge_model.py`)**: L2-regularized linear regression with cross-validation
+- **Support Vector Machine (`src/models/SVM_model.py`)**: Non-linear regression with RBF kernel
+
+### AutoML Framework
+- **AutoGluon (`src/models/AutoGluon_model.py`)**: Automated machine learning with model stacking and ensemble
 
 ### Global Application (`src/models/application/`)
 - Dedicated scripts for worldwide model application
@@ -153,7 +163,7 @@ The pipeline includes comprehensive outlier detection with multiple methods:
 
 The pipeline generates:
 - Cleaned datasets with outlier removal (1,367 samples from 1,482 original)
-- 8 trained machine learning models with comprehensive summaries
+- 12 trained machine learning models with comprehensive summaries
 - Global BNPP prediction maps at 0.5-degree resolution
 - Model evaluation metrics and cross-validation results
 - Feature importance analysis and visualization plots
