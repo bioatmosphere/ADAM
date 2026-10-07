@@ -32,7 +32,9 @@ predictors, a third of the soil values missing.
 
 ```bash
 export TABPFN_TOKEN="<token from platform.priorlabs.ai/account/api-keys>"
-uv run python -m src.tabpfn35.run all
+uv run python -m src.tabpfn35.run check     # what is on disk, what can run
+uv run python -m src.tabpfn35.run validate  # ~6 min, ~0.9 M credits
+uv run python -m src.tabpfn35.run global    # ~1 min, ~0.1 M credits
 ```
 
 ## Results
@@ -101,6 +103,42 @@ estimate: the width of TabPFN's 80 % predictive interval, and a nearest-neighbou
 applicability domain (after Meyer & Pebesma 2021) that flags cells whose
 predictors fall outside the sampled range. Deserts, ice sheets and other
 unsampled regimes are left unpredicted rather than coloured in.
+
+## Reproducing this from a fresh clone
+
+Everything in the Results section reproduces from what is committed here, plus a
+TabPFN API token. `run.py check` prints the state of each input and which
+commands it unblocks.
+
+**Committed with the submission (9 MB)**
+
+| File | What it is |
+|---|---|
+| `productivity/earth/aggregated_data.csv` | the 5 837 BNPP records with their 17 predictors |
+| `output/tabpfn35/global_predictor_stack_0.5deg.nc` | the 17 predictors on the global 0.5° grid |
+
+With those two, `validate`, `global` and `figures` all run. That covers every
+number and every figure in this submission.
+
+**Fetched on demand (72 MB)**
+
+`run.py fetch-soil` pulls the nine SoilGrids 2.0 5 km rasters from
+`files.isric.org`. Needed only to rebuild the stack.
+
+**Not shipped (~18 GB), needed only to rebuild the stack from raw sources**
+
+| Source | Size | How to get it |
+|---|---|---|
+| TerraClimate 2001-2010, six variables | ~9 GB | `python src/ancillary/terraclimate.py --mode download --variables aet pet ppt tmax tmin vpd --start-year 2001 --end-year 2010` |
+| Soil moisture, `ancillary/soilmoisture/ec_ors.nc` | ~9 GB | **not a public download** — an EC ORS field provided by its authors (contact address is in the file's attributes) |
+| Elevation, `ancillary/elevation/global_elevation_0.5deg.nc` | 2 MB | `python src/ancillary/download_global_elevation.py` |
+
+The soil-moisture field is the reason the stack travels with the submission
+rather than being treated as a build artefact: it cannot be re-downloaded, so
+shipping the 0.5° stack is what makes the global prediction independently
+reproducible. `stack_provenance_check.csv` is the audit trail for that stack —
+it shows the committed layers reproducing the training table's own values at all
+529 coordinates.
 
 ## Data provenance, and three bugs it caught
 

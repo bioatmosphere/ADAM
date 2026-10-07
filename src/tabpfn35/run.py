@@ -1,5 +1,6 @@
 """Command line entry point for the TabPFN-3.5 BNPP pipeline.
 
+    python -m src.tabpfn35.run check          # what is on disk and what can run
     python -m src.tabpfn35.run fetch-soil     # download the SoilGrids 5 km rasters
     python -m src.tabpfn35.run stack          # build the 0.5 deg predictor stack + QC
     python -m src.tabpfn35.run validate       # random / site / spatial-block validation
@@ -38,6 +39,7 @@ def main(argv=None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("check", help="report which inputs are present and what can run")
     sub.add_parser("fetch-soil", help="download the SoilGrids 2.0 5 km rasters")
 
     stack_parser = sub.add_parser("stack", help="build the global predictor stack")
@@ -70,6 +72,12 @@ def main(argv=None) -> int:
     all_parser.add_argument("--resolution", type=float, default=config.GRID_RESOLUTION)
 
     args = parser.parse_args(argv)
+
+    if args.command == "check":
+        from . import inputs
+
+        inputs.check()
+        return 0
 
     if args.command == "fetch-soil":
         from . import stack as stack_module

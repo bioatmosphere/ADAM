@@ -45,7 +45,11 @@ What it adds over the 12-model benchmark:
   climate summed instead of averaged over months (~12× off for ppt/aet/pet), soil
   taken from OpenLandMap instead of SoilGrids, and the wrong soil-moisture file.
 
-Outputs land in `output/tabpfn35/`.
+Outputs land in `output/tabpfn35/` and are committed. The training table and the
+0.5° predictor stack ship with the branch, so `validate`, `global` and `figures`
+run from a fresh clone with only an API token;
+`uv run python -m src.tabpfn35.run check` reports what is present and what each
+command still needs.
 
 ## Quick Start
 

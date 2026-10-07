@@ -112,7 +112,12 @@ docs/_build/
 !output/tabpfn35/*.json
 !output/tabpfn35/*.log
 !output/tabpfn35/global_bnpp_fraction_tabpfn35.nc
-# ...but not the per-batch API cache or the 7 MB predictor stack, which
-# `python -m src.tabpfn35.run stack` rebuilds from the source datasets.
+# ...but not the per-batch API cache, which is only resume state.
 output/tabpfn35/prediction_batches/
-output/tabpfn35/global_predictor_stack_0.5deg.nc
+
+# The two inputs the pipeline ships with, so that `validate`, `global` and
+# `figures` all run from a fresh clone. Rebuilding the stack instead needs the
+# ~18 GB of TerraClimate and soil-moisture source data; see
+# `python -m src.tabpfn35.run check`.
+!output/tabpfn35/global_predictor_stack_0.5deg.nc
+!productivity/earth/aggregated_data.csv
