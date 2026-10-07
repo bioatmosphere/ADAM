@@ -258,106 +258,98 @@ def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_d
         raise ValueError(f"Missing required columns: {missing_cols}")
     
     print(f"Loaded {len(df)} records with {len(df.columns)} features")
-    # Find the BNPP column (case-insensitive)
-    bnpp_col = next((col for col in df.columns if col.lower() == 'bnpp'), None)
-    if bnpp_col:
-        print(f"Target variable ({bnpp_col}) range: {df[bnpp_col].min():.2f} to {df[bnpp_col].max():.2f}")
+    print(f"Target variable (BNPP_fraction) range: {df['BNPP_fraction'].min():.4f} to {df['BNPP_fraction'].max():.4f}")
     
     return df
 
 
-def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple[pd.DataFrame, pd.Series]:
+def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP_fraction') -> Tuple[pd.DataFrame, pd.Series]:
     """
     Prepare feature matrix and target vector for machine learning.
-    
+
     Args:
         df: Integrated dataset
         target_col: Name of target variable column
-        
+
     Returns:
         Tuple of (features DataFrame, target Series)
     """
-    # Remove non-predictive columns (including lat/lon to avoid spatial overfitting)
-    exclude_cols = [
-        target_col, 'site_id', 'study_id', 'measurement_id', 'lat', 'lon',
-        'BNPP_units', 'data_source', 'biome'  # New columns from updated aggregation
-    ] 
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
-    
+    # Use same 17 features as RF, XGBoost, MLP, and AutoGluon for consistency
+    feature_cols = [
+        'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation'
+    ]
+
     # Handle missing values
     X = df[feature_cols].copy()
     y = df[target_col].copy()
-    
+
     # Remove rows with missing target values
     valid_idx = ~y.isna()
     X = X[valid_idx]
     y = y[valid_idx]
-    
-    print(f"Initial features: {list(X.columns)}")
-    
-    # Remove categorical variables (keep only numeric features)
-    categorical_cols = X.select_dtypes(include=['object']).columns
-    if len(categorical_cols) > 0:
-        print(f"Excluding categorical variables: {list(categorical_cols)}")
-        X = X.select_dtypes(exclude=['object'])
-    
+
+    print(f"Using {len(feature_cols)} environmental features (excluding BNPP/TNPP/ANPP to prevent data leakage)")
+    print(f"Features: {feature_cols}")
+
     # Fill missing features with median values
     X = X.fillna(X.median())
-    
+
     print(f"Features prepared: {X.shape[1]} variables, {X.shape[0]} samples")
-    print(f"Final feature columns: {list(X.columns)}")
-    print(f"Target variable ({target_col}) range: {y.min():.2f} to {y.max():.2f}")
+    print(f"Target variable ({target_col}) range: {y.min():.4f} to {y.max():.4f}")
     
     return X, y
 
 
 def plot_data_distribution(df: pd.DataFrame, save_path: str = "deep_ensemble/de_data_distribution.png"):
-    """Plot distribution of BNPP data by ecosystem type and data source."""
+    """Plot distribution of BNPP_fraction data by ecosystem type and data source."""
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle('BNPP Data Distribution Analysis - Deep Ensemble', fontsize=16, fontweight='bold')
-    
-    # 1. Histogram of BNPP values
+    fig.suptitle('BNPP Fraction Data Distribution Analysis - Deep Ensemble', fontsize=16, fontweight='bold')
+
+    # 1. Histogram of BNPP_fraction values
     ax1 = axes[0, 0]
-    ax1.hist(df['BNPP'], bins=30, alpha=0.7, color='navy', edgecolor='black')
-    ax1.set_xlabel('BNPP (g C m⁻² yr⁻¹)')
+    ax1.hist(df['BNPP_fraction'].dropna(), bins=30, alpha=0.7, color='navy', edgecolor='black')
+    ax1.set_xlabel('BNPP Fraction (BNPP/TNPP)')
     ax1.set_ylabel('Frequency')
-    ax1.set_title('Distribution of BNPP Values')
+    ax1.set_title('Distribution of BNPP Fraction Values')
     ax1.grid(True, alpha=0.3)
-    
+
     # 2. Box plot by data source if available
     ax2 = axes[0, 1]
     if 'data_source' in df.columns:
         data_sources = df['data_source'].dropna().unique()
         if len(data_sources) > 1:
             import seaborn as sns
-            sns.boxplot(data=df, x='data_source', y='BNPP', ax=ax2)
+            sns.boxplot(data=df, x='data_source', y='BNPP_fraction', ax=ax2)
             ax2.set_xlabel('Data Source')
-            ax2.set_ylabel('BNPP (g C m⁻² yr⁻¹)')
-            ax2.set_title('BNPP by Data Source')
+            ax2.set_ylabel('BNPP Fraction')
+            ax2.set_title('BNPP Fraction by Data Source')
         else:
             ax2.text(0.5, 0.5, 'Single data source', ha='center', va='center', transform=ax2.transAxes)
     else:
         ax2.text(0.5, 0.5, 'No data source info', ha='center', va='center', transform=ax2.transAxes)
-    
+
     # 3. Ensemble architecture diagram
     ax3 = axes[1, 0]
     architectures = ['Deep\nNetwork', 'Wide\nNetwork', 'Residual\nNetwork', 'Attention\nNetwork', 'Simple\nNetwork']
     y_pos = np.arange(len(architectures))
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    
+
     bars = ax3.barh(y_pos, [1]*len(architectures), color=colors, alpha=0.7)
     ax3.set_yticks(y_pos)
     ax3.set_yticklabels(architectures)
     ax3.set_xlabel('Ensemble Components')
     ax3.set_title('Deep Ensemble Architecture')
-    ax3.text(0.5, -0.5, 'Ensemble = Average of 5 Models', ha='center', transform=ax3.transAxes, 
+    ax3.text(0.5, -0.5, 'Ensemble = Average of 5 Models', ha='center', transform=ax3.transAxes,
              fontsize=10, style='italic')
-    
+
     # 4. Feature correlation heatmap
     ax4 = axes[1, 1]
-    numeric_cols = ['BNPP', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly']
+    numeric_cols = ['BNPP_fraction', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd']
     available_cols = [col for col in numeric_cols if col in df.columns]
-    
+
     if len(available_cols) >= 4:
         import seaborn as sns
         corr_matrix = df[available_cols].corr()
@@ -365,7 +357,7 @@ def plot_data_distribution(df: pd.DataFrame, save_path: str = "deep_ensemble/de_
                    square=True, fmt='.2f', cbar_kws={'shrink': 0.8})
         ax4.set_title('Feature Correlation Matrix')
     else:
-        ax4.text(0.5, 0.5, 'Insufficient features for correlation', 
+        ax4.text(0.5, 0.5, 'Insufficient features for correlation',
                 ha='center', va='center', transform=ax4.transAxes)
     
     plt.tight_layout()
@@ -833,8 +825,8 @@ def plot_predictions_with_uncertainty(y_true: pd.Series, y_pred: np.ndarray, unc
     max_val = max(y_true.max(), y_pred.max())
     ax1.plot([min_val, max_val], [min_val, max_val], '--r', linewidth=2, label='Perfect Prediction')
     
-    ax1.set_xlabel('Actual BNPP (g C m⁻² yr⁻¹)')
-    ax1.set_ylabel('Predicted BNPP (g C m⁻² yr⁻¹)')
+    ax1.set_xlabel('Actual BNPP Fraction')
+    ax1.set_ylabel('Predicted BNPP Fraction')
     ax1.set_title(f'Ensemble Predictions with Uncertainty (R² = {r2:.4f})')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
@@ -977,9 +969,10 @@ def main():
         print("DEEP ENSEMBLE TRAINING COMPLETED")
         print(f"{'='*60}")
         print(f"✓ Ensemble trained on {len(df)} samples with {X.shape[1]} features")
+        print(f"✓ Target: BNPP_fraction (BNPP/TNPP ratio)")
         print(f"✓ Number of models: {metrics['n_models']}")
         print(f"✓ Test R²: {metrics['test_r2']:.4f}")
-        print(f"✓ Test RMSE: {metrics['test_rmse']:.4f} g C m⁻² yr⁻¹")
+        print(f"✓ Test RMSE: {metrics['test_rmse']:.4f}")
         print(f"✓ Mean uncertainty: {metrics['mean_uncertainty']:.4f}")
         print(f"✓ Outputs saved to: deep_ensemble/ directory")
         

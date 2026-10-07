@@ -88,42 +88,42 @@ def load_integrated_data() -> pd.DataFrame:
             )
     
     print(f"Loaded {len(df)} records with {df.shape[1]} features")
-    print(f"Target variable (BNPP) range: {df['BNPP'].min():.2f} to {df['BNPP'].max():.2f}")
+    print(f"Target variable (BNPP_fraction) range: {df['BNPP_fraction'].min():.4f} to {df['BNPP_fraction'].max():.4f}")
     
     return df
 
 def plot_data_distribution(df: pd.DataFrame, save_path: str = "autogluon/autogluon_data_distribution.png"):
-    """Plot the distribution of BNPP data."""
+    """Plot the distribution of BNPP_fraction data."""
     # Create output directory
     output_path = Path(save_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    
+
     # Histogram
-    axes[0, 0].hist(df['BNPP'], bins=50, alpha=0.7, edgecolor='black')
-    axes[0, 0].set_xlabel('BNPP (g C m⁻² yr⁻¹)')
+    axes[0, 0].hist(df['BNPP_fraction'].dropna(), bins=50, alpha=0.7, edgecolor='black')
+    axes[0, 0].set_xlabel('BNPP Fraction (BNPP/TNPP)')
     axes[0, 0].set_ylabel('Frequency')
-    axes[0, 0].set_title('Distribution of BNPP Values')
+    axes[0, 0].set_title('Distribution of BNPP Fraction Values')
     axes[0, 0].grid(True, alpha=0.3)
-    
+
     # Box plot
-    axes[0, 1].boxplot(df['BNPP'])
-    axes[0, 1].set_ylabel('BNPP (g C m⁻² yr⁻¹)')
-    axes[0, 1].set_title('BNPP Box Plot')
+    axes[0, 1].boxplot(df['BNPP_fraction'].dropna())
+    axes[0, 1].set_ylabel('BNPP Fraction')
+    axes[0, 1].set_title('BNPP Fraction Box Plot')
     axes[0, 1].grid(True, alpha=0.3)
-    
+
     # Q-Q plot
     from scipy import stats
-    stats.probplot(df['BNPP'], dist="norm", plot=axes[1, 0])
+    stats.probplot(df['BNPP_fraction'].dropna(), dist="norm", plot=axes[1, 0])
     axes[1, 0].set_title('Q-Q Plot (Normal Distribution)')
     axes[1, 0].grid(True, alpha=0.3)
-    
-    # Log-scale histogram
-    axes[1, 1].hist(np.log1p(df['BNPP']), bins=50, alpha=0.7, edgecolor='black')
-    axes[1, 1].set_xlabel('log(BNPP + 1)')
-    axes[1, 1].set_ylabel('Frequency')
-    axes[1, 1].set_title('Distribution of log(BNPP + 1)')
+
+    # Scatter: BNPP_fraction vs precipitation
+    axes[1, 1].scatter(df['ppt'], df['BNPP_fraction'], alpha=0.5)
+    axes[1, 1].set_xlabel('Precipitation (mm)')
+    axes[1, 1].set_ylabel('BNPP Fraction')
+    axes[1, 1].set_title('BNPP Fraction vs Precipitation')
     axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
@@ -142,21 +142,21 @@ def prepare_features_target(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
         Tuple of (prepared_dataframe, target_column_name)
     """
     # Define feature columns (excluding geographic coordinates and metadata)
+    # Use same 17 features as RF, XGBoost, and MLP for consistency
     feature_columns = [
         'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
-        'gpp_yearly', 'soil_carbon_stock', 'clay_content', 
-        'silt_content', 'sand_content', 'nitrogen_content',
-        'cation_exchange_capacity', 'ph_in_water', 'bulk_density',
-        'coarse_fragments', 'soil_moisture', 'elevation'
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation'
     ]
-    
+
     # Filter to only include columns that exist in the dataframe
     available_features = [col for col in feature_columns if col in df.columns]
-    
+
     print(f"Initial features: {available_features}")
-    
+
     # Create DataFrame with features and target
-    target_col = 'BNPP'
+    target_col = 'BNPP_fraction'
     columns_to_keep = available_features + [target_col]
     
     prepared_df = df[columns_to_keep].copy()
@@ -165,7 +165,7 @@ def prepare_features_target(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     prepared_df = prepared_df.dropna(subset=[target_col])
     
     print(f"Features prepared: {len(available_features)} variables, {len(prepared_df)} samples")
-    print(f"Target variable (BNPP) range: {prepared_df[target_col].min():.2f} to {prepared_df[target_col].max():.2f}")
+    print(f"Target variable (BNPP_fraction) range: {prepared_df[target_col].min():.4f} to {prepared_df[target_col].max():.4f}")
     
     # Check missing values in features
     missing_info = prepared_df[available_features].isnull().sum()
@@ -335,9 +335,9 @@ def plot_predictions(
     plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect Prediction')
     
     # Labels and title
-    plt.xlabel('Actual BNPP (g C m⁻² yr⁻¹)')
-    plt.ylabel('Predicted BNPP (g C m⁻² yr⁻¹)')
-    plt.title(f'AutoGluon Model: Predicted vs Actual BNPP\nR² = {r2_score_val:.4f}')
+    plt.xlabel('Actual BNPP Fraction')
+    plt.ylabel('Predicted BNPP Fraction')
+    plt.title(f'AutoGluon Model: Predicted vs Actual BNPP Fraction\nR² = {r2_score_val:.4f}')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
@@ -388,10 +388,10 @@ def save_model_leaderboard_and_summary(
         f.write("-" * 20 + "\n")
         f.write(f"Training R²: {metrics['train_r2']:.4f}\n")
         f.write(f"Test R²: {metrics['test_r2']:.4f}\n")
-        f.write(f"Training RMSE: {metrics['train_rmse']:.4f} g C m⁻² yr⁻¹\n")
-        f.write(f"Test RMSE: {metrics['test_rmse']:.4f} g C m⁻² yr⁻¹\n")
-        f.write(f"Training MAE: {metrics['train_mae']:.4f} g C m⁻² yr⁻¹\n")
-        f.write(f"Test MAE: {metrics['test_mae']:.4f} g C m⁻² yr⁻¹\n")
+        f.write(f"Training RMSE: {metrics['train_rmse']:.4f}\n")
+        f.write(f"Test RMSE: {metrics['test_rmse']:.4f}\n")
+        f.write(f"Training MAE: {metrics['train_mae']:.4f}\n")
+        f.write(f"Test MAE: {metrics['test_mae']:.4f}\n")
         f.write(f"Training Time: {metrics['training_time']:.2f} seconds\n\n")
         
         f.write("Model Information:\n")
@@ -462,8 +462,9 @@ def main():
         print("AUTOGLUON TRAINING COMPLETED")
         print(f"{'='*60}")
         print(f"✓ Model trained on {len(prepared_df)} samples with {len(prepared_df.columns)-1} features")
+        print(f"✓ Target: BNPP_fraction (BNPP/TNPP ratio)")
         print(f"✓ Test R²: {metrics['test_r2']:.4f}")
-        print(f"✓ Test RMSE: {metrics['test_rmse']:.4f} g C m⁻² yr⁻¹")
+        print(f"✓ Test RMSE: {metrics['test_rmse']:.4f}")
         print(f"✓ Training time: {metrics['training_time']:.2f} seconds")
         print(f"✓ Model saved to: autogluon_model/")
         print(f"✓ Outputs saved to: autogluon/ directory")

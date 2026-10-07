@@ -1,8 +1,8 @@
 """
 A Belowground Productivity (BP) Multi-Layer Perceptron (MLP) model for the ELM-TAM benchmark pipeline.
 
-This module provides PyTorch-based neural network functionality for predicting belowground 
-net primary productivity (BNPP) using environmental predictors from the TAM framework.
+This module provides PyTorch-based neural network functionality for predicting belowground
+net primary productivity fraction (BNPP/TNPP) using environmental predictors.
 
 Key functions:
 - train_mlp: Train MLP model on integrated dataset
@@ -11,9 +11,13 @@ Key functions:
 
 Data sources integrated:
 - ForC global forest carbon database
-- GherardiSala grassland productivity data  
-- TerraClimate environmental variables
+- Global grassland productivity database
+- TerraClimate environmental variables (aet, pet, ppt, tmax, tmin, vpd)
 - SoilGrids soil properties
+- Elevation and soil moisture data
+
+Target variable: BNPP_fraction (BNPP/TNPP ratio, 0-1 scale)
+Total samples: 5,837 measurements from global ecosystems
 
 Author: TAM Development Team
 """
@@ -78,7 +82,7 @@ class BP_MLP(nn.Module):
         return self.model(x)
 
 
-def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_data.csv") -> pd.DataFrame:
+def load_integrated_data(data_path: str = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/aggregated_data_cleaned.csv") -> pd.DataFrame:
     """
     Load the integrated dataset from the data aggregation pipeline.
     
@@ -95,64 +99,137 @@ def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_d
     data_path = Path(data_path)
     
     if not data_path.exists():
-        raise FileNotFoundError(
-            f"Integrated dataset not found at {data_path}. "
-            "Please run the data aggregation pipeline first."
-        )
+        # Try fallback to original uncleaned data
+        fallback_path = Path("/Users/6lw/Desktop/2_models/ADAM/productivity/earth/aggregated_data.csv")
+        if fallback_path.exists():
+            print(f"Cleaned data not found, using original data from: {fallback_path}")
+            data_path = fallback_path
+        else:
+            raise FileNotFoundError(
+                f"Integrated dataset not found at {data_path}. "
+                "Please run the data aggregation pipeline first."
+            )
     
     print(f"Loading integrated data from: {data_path}")
     df = pd.read_csv(data_path)
     
     # Validate required columns based on the known structure
-    required_cols = ['BNPP', 'lat', 'lon']  # Minimum required columns
+    required_cols = ['BNPP_fraction', 'lat', 'lon']  # Minimum required columns
     missing_cols = [col for col in required_cols if col not in df.columns]
-    
+
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
-    
+
     print(f"Loaded {len(df)} records with {len(df.columns)} features")
-    print(f"Target variable (BNPP) range: {df['BNPP'].min():.2f} to {df['BNPP'].max():.2f}")
+    print(f"Target variable (BNPP_fraction) range: {df['BNPP_fraction'].min():.2f} to {df['BNPP_fraction'].max():.2f}")
     
     return df
 
 
-def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple[pd.DataFrame, pd.Series]:
+def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP_fraction') -> Tuple[pd.DataFrame, pd.Series]:
     """
     Prepare feature matrix and target vector for machine learning.
-    
+
     Args:
         df: Integrated dataset
         target_col: Name of target variable column
-        
+
     Returns:
         Tuple of (features DataFrame, target Series)
     """
-    # Remove non-predictive columns (including lat/lon to avoid spatial overfitting)
-    exclude_cols = [target_col, 'site_id', 'study_id', 'measurement_id', 'lat', 'lon'] 
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
-    
+    # Use only environmental features (exclude BNPP, TNPP, ANPP to avoid data leakage)
+    # These 17 features match what was used in Random Forest, TabPFN, and XGBoost models
+    feature_cols = [
+        'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation'
+    ]
+
     # Handle missing values
     X = df[feature_cols].copy()
     y = df[target_col].copy()
-    
+
     # Remove rows with missing target values
     valid_idx = ~y.isna()
     X = X[valid_idx]
     y = y[valid_idx]
-    
-    # Remove categorical variables (keep only numeric features)
-    categorical_cols = X.select_dtypes(include=['object']).columns
-    if len(categorical_cols) > 0:
-        print(f"Excluding categorical variables: {list(categorical_cols)}")
-        X = X.select_dtypes(exclude=['object'])
-    
+
+    print(f"Using {len(feature_cols)} environmental features (excluding BNPP/TNPP/ANPP to prevent data leakage)")
+    print(f"Features: {feature_cols}")
+
     # Fill missing features with median values
     X = X.fillna(X.median())
-    
+
     print(f"Features prepared: {X.shape[1]} variables, {X.shape[0]} samples")
-    print(f"Feature columns: {list(X.columns)}")
-    
+    print(f"Target variable ({target_col}) range: {y.min():.2f} to {y.max():.2f}")
+
     return X, y
+
+
+def plot_data_distribution(df: pd.DataFrame, save_path: str = "mlp_bnpp_fraction/mlp_data_distribution.png"):
+    """Plot distribution of BNPP_fraction data by ecosystem type and data source."""
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle('BNPP Fraction Data Distribution Analysis - MLP', fontsize=16, fontweight='bold')
+
+    # 1. Histogram of BNPP_fraction values
+    ax1 = axes[0, 0]
+    ax1.hist(df['BNPP_fraction'], bins=30, alpha=0.7, color='mediumslateblue', edgecolor='black')
+    ax1.set_xlabel('BNPP Fraction (BNPP/TNPP)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Distribution of BNPP Fraction Values')
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Box plot by data source if available
+    ax2 = axes[0, 1]
+    if 'data_source' in df.columns:
+        data_sources = df['data_source'].dropna().unique()
+        if len(data_sources) > 1:
+            import seaborn as sns
+            sns.boxplot(data=df, x='data_source', y='BNPP_fraction', ax=ax2)
+            ax2.set_xlabel('Data Source')
+            ax2.set_ylabel('BNPP Fraction')
+            ax2.set_title('BNPP Fraction by Data Source')
+        else:
+            ax2.text(0.5, 0.5, 'Single data source', ha='center', va='center', transform=ax2.transAxes)
+    else:
+        ax2.text(0.5, 0.5, 'No data source info', ha='center', va='center', transform=ax2.transAxes)
+    
+    # 3. Scatter plot: BNPP vs evapotranspiration
+    ax3 = axes[1, 0]
+    if 'aet' in df.columns:
+        ax3.scatter(df['aet'], df['BNPP'], alpha=0.6, color='darkgreen')
+        ax3.set_xlabel('Actual Evapotranspiration (mm)')
+        ax3.set_ylabel('BNPP (g C m⁻² yr⁻¹)')
+        ax3.set_title('BNPP vs Actual Evapotranspiration')
+        ax3.grid(True, alpha=0.3)
+    else:
+        ax3.text(0.5, 0.5, 'No AET data', ha='center', va='center', transform=ax3.transAxes)
+    
+    # 4. Neural network complexity visualization
+    ax4 = axes[1, 1]
+    # Show feature correlation matrix
+    numeric_cols = ['BNPP', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd']
+    available_cols = [col for col in numeric_cols if col in df.columns]
+    
+    if len(available_cols) >= 3:
+        import seaborn as sns
+        corr_matrix = df[available_cols].corr()
+        sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, ax=ax4,
+                   square=True, fmt='.2f', cbar_kws={'shrink': 0.8})
+        ax4.set_title('Feature Correlation Matrix')
+    else:
+        ax4.text(0.5, 0.5, 'Insufficient features for correlation', 
+                ha='center', va='center', transform=ax4.transAxes)
+    
+    plt.tight_layout()
+    
+    # Save the plot
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"MLP data distribution plot saved to: {save_path}")
+    plt.close()
 
 
 def create_data_loaders(X_train, X_test, y_train, y_test, batch_size=32):
@@ -506,7 +583,7 @@ def evaluate_model(
     return metrics
 
 
-def plot_training_curves(train_losses, test_losses, save_path: str = "../models/mlp_training_curves_best.png"):
+def plot_training_curves(train_losses, test_losses, save_path: str = "mlp/mlp_training_curves_best.png"):
     """Plot training and validation loss curves."""
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_losses) + 1)
@@ -527,7 +604,7 @@ def plot_training_curves(train_losses, test_losses, save_path: str = "../models/
     plt.close()
 
 
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/mlp_predictions_plot_best.png"):
+def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "mlp/mlp_predictions_plot_best.png"):
     """Plot actual vs predicted values with perfect prediction line."""
     plt.figure(figsize=(10, 8))
     plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
@@ -537,8 +614,8 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     max_val = max(y_true.max(), y_pred.max())
     plt.plot([min_val, max_val], [min_val, max_val], '--r', linewidth=2, label='Perfect Prediction')
     
-    plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
-    plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
+    plt.xlabel('Actual BNPP (g C m⁻² yr⁻¹)')
+    plt.ylabel('Predicted BNPP (g C m⁻² yr⁻¹)')
     plt.title(f'Actual vs Predicted BNPP - Best MLP Model (R² = {r2:.4f})')
     plt.legend()
     plt.grid(True, alpha=0.3)
@@ -552,7 +629,7 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     plt.close()
 
 
-def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path: str = "../models/mlp_model_best.pkl"):
+def save_model(model: BP_MLP, metrics: Dict, scaler: StandardScaler, output_path: str = "mlp/mlp_model_best.pkl"):
     """Save trained model, scaler and metrics to disk."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

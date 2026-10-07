@@ -9,45 +9,45 @@ Ensemble Architecture:
 - Simple Network (2 layers, 64→32)
 
 Ensemble Performance:
-Training R²: 0.4047
-Validation R²: 0.3931
-Test R²: 0.3384
-Training RMSE: 210.2009
-Validation RMSE: 203.6426
-Test RMSE: 221.5911
-Training MAE: 147.5256
-Validation MAE: 147.7318
-Test MAE: 153.3521
+Training R²: 0.6348
+Validation R²: 0.5381
+Test R²: 0.5779
+Training RMSE: 0.1246
+Validation RMSE: 0.1369
+Test RMSE: 0.1352
+Training MAE: 0.0908
+Validation MAE: 0.1015
+Test MAE: 0.1004
 
 Uncertainty Statistics:
-Mean uncertainty: 65.2214
-Std uncertainty: 54.5166
+Mean uncertainty: 0.0225
+Std uncertainty: 0.0146
 
 Dataset Information:
-Number of features: 18
-Training samples: 908
-Validation samples: 228
-Test samples: 284
+Number of features: 17
+Training samples: 3735
+Validation samples: 934
+Test samples: 1168
 Number of models: 5
 
 Individual Model Performance:
 Deep Network:
-  Test R²: 0.3274
-  Test RMSE: 223.4373
-  Test MAE: 148.8244
+  Test R²: 0.5571
+  Test RMSE: 0.1385
+  Test MAE: 0.1021
 Wide Network:
-  Test R²: 0.2141
-  Test RMSE: 241.5211
-  Test MAE: 169.4525
+  Test R²: 0.5731
+  Test RMSE: 0.1360
+  Test MAE: 0.1002
 Residual Network:
-  Test R²: 0.3249
-  Test RMSE: 223.8389
-  Test MAE: 144.5331
+  Test R²: 0.5659
+  Test RMSE: 0.1371
+  Test MAE: 0.1005
 Attention Network:
-  Test R²: 0.1489
-  Test RMSE: 251.3294
-  Test MAE: 177.0865
+  Test R²: 0.5478
+  Test RMSE: 0.1399
+  Test MAE: 0.1069
 Simple Network:
-  Test R²: 0.1901
-  Test RMSE: 245.1849
-  Test MAE: 171.1793
+  Test R²: 0.5629
+  Test RMSE: 0.1376
+  Test MAE: 0.1022

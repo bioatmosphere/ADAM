@@ -2,20 +2,20 @@ Best Multi-Layer Perceptron (MLP) Model Summary
 ==================================================
 
 Model Performance:
-Training R²: 0.6718
-Test R²: 0.4478
-Training RMSE: 154.8427
-Test RMSE: 202.4472
-Training MAE: 104.7792
-Test MAE: 135.2379
+Training R²: 0.6257
+Test R²: 0.5658
+Training RMSE: 0.1256
+Test RMSE: 0.1371
+Training MAE: 0.0901
+Test MAE: 0.0997
 
 Dataset Information:
-Number of features: 18
-Training samples: 1136
-Test samples: 284
+Number of features: 17
+Training samples: 4669
+Test samples: 1168
 
 Model Architecture:
-Input features: 18
-Hidden layers: [256, 128, 64, 32]
+Input features: 17
+Hidden layers: [512, 256, 128]
 Output size: 1
 Dropout rate: 0.2

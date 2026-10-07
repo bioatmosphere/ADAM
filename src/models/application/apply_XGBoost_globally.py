@@ -7,6 +7,7 @@ worldwide BNPP predictions at 0.5-degree resolution.
 Data sources for global application:
 - TerraClimate: Global climate variables (aet, pet, ppt, tmax, tmin, vpd)
 - GLASS: Global GPP satellite data from HDF tiles
+- SoilGrids: Mean soil property values from training data
 - Output: Global BNPP predictions at 0.5-degree resolution
 
 Author: TAM Development Team
@@ -16,17 +17,21 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
+# import cartopy.crs as ccrs
+# import cartopy.features as cfeatures
 from pathlib import Path
 import pickle
 import warnings
 from typing import Tuple, Dict
+# import rasterio
+# from rasterio.transform import from_bounds
 import xgboost as xgb
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
 
-def load_trained_xgb_model(model_path: str = "../xgb_model.pkl") -> Tuple[xgb.XGBRegressor, Dict]:
+def load_trained_xgb_model(model_path: str = "/Users/6lw/Desktop/2_models/ADAM/src/models/xgboost/xgb_model.pkl") -> Tuple[xgb.XGBRegressor, Dict]:
     """
     Load the trained XGBoost model and metadata.
     
@@ -56,7 +61,7 @@ def load_trained_xgb_model(model_path: str = "../xgb_model.pkl") -> Tuple[xgb.XG
     return model, model_data
 
 
-def load_global_terraclimate_data(data_dir: str = "../../../ancillary/terraclimate", year: int = 2010) -> xr.Dataset:
+def load_global_terraclimate_data(data_dir: str = "/Users/6lw/Desktop/2_models/ADAM/ancillary/terraclimate", year: int = 2010) -> xr.Dataset:
     """
     Load global TerraClimate data for specified year.
     
@@ -182,9 +187,43 @@ def interpolate_to_common_grid(climate_ds: xr.Dataset, gpp_da: xr.DataArray,
     return combined
 
 
+def get_training_data_soil_means() -> dict:
+    """
+    Load training data to get mean soil property values for global application.
+    
+    Returns:
+        Dictionary with mean soil property values
+    """
+    # Load the aggregated training data
+    training_path = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/aggregated_data.csv"
+    
+    if not Path(training_path).exists():
+        raise FileNotFoundError(f"Training data not found at {training_path}")
+    
+    df = pd.read_csv(training_path)
+    
+    # Calculate mean values for soil properties
+    soil_properties = [
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments'
+    ]
+    
+    soil_means = {}
+    for prop in soil_properties:
+        if prop in df.columns:
+            soil_means[prop] = df[prop].mean(skipna=True)
+    
+    print("Using mean soil property values from training data:")
+    for prop, value in soil_means.items():
+        print(f"  {prop}: {value:.3f}")
+    
+    return soil_means
+
 def prepare_global_features(dataset: xr.Dataset, required_features: list) -> pd.DataFrame:
     """
     Convert global xarray dataset to DataFrame for model prediction.
+    For missing soil data, use mean values from training data.
     
     Args:
         dataset: Combined global dataset
@@ -193,7 +232,7 @@ def prepare_global_features(dataset: xr.Dataset, required_features: list) -> pd.
     Returns:
         DataFrame with global features
     """
-    print("Preparing global features for XGBoost model application...")
+    print("Preparing global features for model application...")
     
     # Create meshgrid of coordinates
     lat_vals, lon_vals = np.meshgrid(dataset.lat.values, dataset.lon.values, indexing='ij')
@@ -203,7 +242,7 @@ def prepare_global_features(dataset: xr.Dataset, required_features: list) -> pd.
     data_dict['lat'] = lat_vals.flatten()
     data_dict['lon'] = lon_vals.flatten()
     
-    # Add each variable
+    # Add each variable from dataset
     for var in dataset.data_vars:
         values = dataset[var].values.flatten()
         data_dict[var] = values
@@ -213,10 +252,23 @@ def prepare_global_features(dataset: xr.Dataset, required_features: list) -> pd.
     # Remove NaN values
     df_clean = df.dropna()
     
-    # Check for required features
+    # Check for missing features and add soil data means
     missing_features = [f for f in required_features if f not in df_clean.columns]
+    
     if missing_features:
-        raise ValueError(f"Missing required features: {missing_features}")
+        print(f"Missing features detected: {missing_features}")
+        print("Loading mean soil property values from training data...")
+        
+        # Get soil means from training data
+        soil_means = get_training_data_soil_means()
+        
+        # Add missing soil features using mean values
+        for feature in missing_features:
+            if feature in soil_means:
+                df_clean[feature] = soil_means[feature]
+                print(f"  Added {feature} with mean value: {soil_means[feature]:.3f}")
+            else:
+                raise ValueError(f"Cannot find mean value for missing feature: {feature}")
     
     # Select only required features
     feature_df = df_clean[required_features].copy()
@@ -249,19 +301,10 @@ def apply_xgb_model_globally(model: xgb.XGBRegressor, features_df: pd.DataFrame)
     """
     print("Applying XGBoost model globally...")
     
-    # Ensure features match training data
-    model_features = model.feature_names_in_ if hasattr(model, 'feature_names_in_') else None
-    if model_features is not None:
-        # Reorder columns to match training data
-        features_df = features_df[model_features]
-    
-    # Handle missing values
-    features_clean = features_df.fillna(features_df.median())
-    
     # Make predictions
-    predictions = model.predict(features_clean)
+    predictions = model.predict(features_df)
     
-    print(f"Global XGBoost predictions complete!")
+    print(f"Global predictions complete!")
     print(f"BNPP range: {predictions.min():.1f} to {predictions.max():.1f} gC m-2 year-1")
     print(f"Mean BNPP: {predictions.mean():.1f} gC m-2 year-1")
     
@@ -269,7 +312,7 @@ def apply_xgb_model_globally(model: xgb.XGBRegressor, features_df: pd.DataFrame)
 
 
 def create_global_prediction_map(predictions: np.ndarray, coords_df: pd.DataFrame, 
-                                output_path: str = "global_bnpp_predictions_xgb.nc") -> xr.DataArray:
+                                output_path: str = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/global_bnpp_predictions_xgb.nc") -> xr.DataArray:
     """
     Create global map of BNPP predictions.
     
@@ -315,7 +358,7 @@ def create_global_prediction_map(predictions: np.ndarray, coords_df: pd.DataFram
             'units': 'gC m-2 year-1',
             'description': 'Global BNPP predictions from XGBoost model',
             'model': 'XGBoost',
-            'features': 'TerraClimate + GLASS GPP'
+            'features': 'TerraClimate + GLASS GPP + SoilGrids'
         }
     )
     
@@ -323,12 +366,12 @@ def create_global_prediction_map(predictions: np.ndarray, coords_df: pd.DataFram
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     bnpp_da.to_netcdf(output_path)
-    print(f"Global XGBoost BNPP predictions saved to: {output_path}")
+    print(f"Global BNPP predictions saved to: {output_path}")
     
     return bnpp_da
 
 
-def plot_global_bnpp_map(bnpp_da: xr.DataArray, save_path: str = "global_bnpp_map_xgb.png"):
+def plot_global_bnpp_map(bnpp_da: xr.DataArray, save_path: str = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/global_bnpp_map_xgb.png"):
     """
     Create global map visualization of BNPP predictions.
     
@@ -336,7 +379,7 @@ def plot_global_bnpp_map(bnpp_da: xr.DataArray, save_path: str = "global_bnpp_ma
         bnpp_da: Global BNPP DataArray
         save_path: Path to save the plot
     """
-    print("Creating global XGBoost BNPP map visualization...")
+    print("Creating global BNPP map visualization...")
     
     fig, ax = plt.subplots(1, 1, figsize=(15, 8))
     
@@ -365,13 +408,13 @@ def plot_global_bnpp_map(bnpp_da: xr.DataArray, save_path: str = "global_bnpp_ma
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Global XGBoost BNPP map saved to: {save_path}")
+    print(f"Global BNPP map saved to: {save_path}")
     plt.close()
 
 
 def main():
     """
-    Main function to apply XGBoost model globally.
+    Main function to apply Random Forest model globally.
     """
     try:
         print("="*60)
@@ -405,7 +448,7 @@ def main():
         
         # 9. Print summary statistics
         print("\n" + "="*60)
-        print("GLOBAL XGBOOST BNPP PREDICTION SUMMARY")
+        print("GLOBAL BNPP PREDICTION SUMMARY")
         print("="*60)
         print(f"Total valid grid points: {len(predictions):,}")
         print(f"Global BNPP statistics:")

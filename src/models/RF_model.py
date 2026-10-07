@@ -1,26 +1,30 @@
 """
-A Belowground Productivity (BP) Random Forest model for the ELM-TAM benchmark pipeline.
+BNPP Fraction Random Forest Prediction Model for the ELM-TAM benchmark pipeline.
 
-This module provides Random Forest regression functionality for predicting belowground 
-net primary productivity (BNPP) using environmental predictors from the TAM framework.
+This module provides Random Forest regression functionality for predicting the
+BNPP fraction (BNPP/TNPP ratio) using environmental predictors from the TAM framework.
 
 Key functions:
-- train_random_forest: Train RF model on integrated dataset
+- train_random_forest: Train Random Forest model on integrated dataset
 - apply_global_rf: Apply trained model for global predictions
 - evaluate_model: Comprehensive model evaluation with saved visualizations
 
 Data sources integrated:
-- ForC global forest carbon database
-- GherardiSala grassland productivity data  
+- ForC global forest carbon database (529 forest sites)
+- Global grassland productivity database (953 grassland sites)
 - TerraClimate environmental variables (aet, pet, ppt, tmax, tmin, vpd)
-- GLASS satellite data (yearly GPP)
-- SoilGrids soil properties
+- SoilGrids soil properties (carbon, texture, nutrients, pH, bulk density)
+- Soil moisture and elevation data
+- Unit conversions: Forest data converted from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹
 
 Model outputs:
-- Trained model file (rf_model.pkl)
-- Feature importance plot (feature_importance.png)
-- Predictions scatter plot (predictions_plot.png)
-- Model summary text file (model_summary.txt)
+- Trained model file (rf_bnpp_fraction_model.pkl)
+- Feature importance plot (rf_bnpp_fraction_feature_importance.png)
+- Predictions scatter plot (rf_bnpp_fraction_predictions_plot.png)
+- Model summary text file (rf_bnpp_fraction_model_summary.txt)
+
+Target variable: BNPP_fraction (ratio of BNPP to TNPP, 0-1 scale)
+Total samples: 1,482 measurements from global ecosystems
 
 Author: TAM Development Team
 """
@@ -34,15 +38,15 @@ import pickle
 import warnings
 from typing import Tuple, Dict
 
-from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
 
-def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_data.csv") -> pd.DataFrame:
+def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_data_cleaned.csv") -> pd.DataFrame:
     """
     Load the integrated dataset from the data aggregation pipeline.
     
@@ -59,131 +63,160 @@ def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_d
     data_path = Path(data_path)
     
     if not data_path.exists():
-        raise FileNotFoundError(
-            f"Integrated dataset not found at {data_path}. "
-            "Please run the data aggregation pipeline first."
-        )
+        # Try fallback to original uncleaned data
+        fallback_path = Path("../../productivity/earth/aggregated_data.csv")
+        if fallback_path.exists():
+            print(f"Cleaned data not found, using original data from: {fallback_path}")
+            data_path = fallback_path
+        else:
+            raise FileNotFoundError(
+                f"Integrated dataset not found at {data_path}. "
+                "Please run the data aggregation pipeline first."
+            )
     
     print(f"Loading integrated data from: {data_path}")
     df = pd.read_csv(data_path)
     
     # Validate required columns (case-insensitive)
-    required_cols = ['bnpp', 'lat', 'lon']  # Minimum required columns
+    required_cols = ['bnpp_fraction', 'lat', 'lon']  # Minimum required columns
     df_cols_lower = [col.lower() for col in df.columns]
     missing_cols = [col for col in required_cols if col not in df_cols_lower]
-    
+
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
-    
+
     print(f"Loaded {len(df)} records with {len(df.columns)} features")
-    # Find the BNPP column (case-insensitive)
-    bnpp_col = next((col for col in df.columns if col.lower() == 'bnpp'), None)
-    if bnpp_col:
-        print(f"Target variable ({bnpp_col}) range: {df[bnpp_col].min():.2f} to {df[bnpp_col].max():.2f}")
+    # Find the BNPP_fraction column (case-insensitive)
+    bnpp_frac_col = next((col for col in df.columns if col.lower() == 'bnpp_fraction'), None)
+    if bnpp_frac_col:
+        print(f"Target variable ({bnpp_frac_col}) range: {df[bnpp_frac_col].min():.4f} to {df[bnpp_frac_col].max():.4f}")
     
     return df
 
 
-def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple[pd.DataFrame, pd.Series]:
+def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP_fraction', use_geographic: bool = False) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Prepare feature matrix and target vector for machine learning.
-    
+
     Args:
         df: Integrated dataset
-        target_col: Name of target variable column
-        
+        target_col: Name of target variable column (default: BNPP_fraction)
+        use_geographic: Whether to include lat/lon coordinates as features
+
     Returns:
         Tuple of (features DataFrame, target Series)
     """
-    # Remove non-predictive columns (including lat/lon to avoid spatial overfitting)
-    exclude_cols = [target_col, 'site_id', 'study_id', 'measurement_id', 'lat', 'lon'] 
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
+    # Define feature columns for BNPP_fraction prediction
+    feature_columns = [
+        'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',  # Climate variables
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',  # Soil properties
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments', 'soil_moisture',  # Additional soil variables
+        'elevation'  # Elevation data
+    ]
+    
+    # Add geographic coordinates if requested
+    if use_geographic:
+        feature_columns = ['lat', 'lon'] + feature_columns
+    
+    # Select available feature columns
+    available_features = [col for col in feature_columns if col in df.columns]
+    print(f"Using {len(available_features)} features: {available_features}")
+    
+    # Create feature matrix
+    X = df[available_features].copy()
     
     # Handle missing values
-    X = df[feature_cols].copy()
+    print(f"Missing values per feature:")
+    missing_counts = X.isnull().sum()
+    for feature, count in missing_counts.items():
+        if count > 0:
+            print(f"  {feature}: {count} ({count/len(X)*100:.1f}%)")
+    
+    # Fill missing values with median for numeric columns
+    for col in X.columns:
+        if X[col].dtype in ['float64', 'int64']:
+            X[col].fillna(X[col].median(), inplace=True)
+    
+    # Create target vector
     y = df[target_col].copy()
     
     # Remove rows with missing target values
-    valid_idx = ~y.isna()
-    X = X[valid_idx]
-    y = y[valid_idx]
+    valid_indices = ~y.isnull()
+    X = X[valid_indices]
+    y = y[valid_indices]
     
-    # Remove categorical variables (keep only numeric features)
-    categorical_cols = X.select_dtypes(include=['object']).columns
-    if len(categorical_cols) > 0:
-        print(f"Excluding categorical variables: {list(categorical_cols)}")
-        X = X.select_dtypes(exclude=['object'])
-    
-    # Fill missing features with median values
-    X = X.fillna(X.median())
-    
-    print(f"Features prepared: {X.shape[1]} variables, {X.shape[0]} samples")
-    print(f"Feature columns: {list(X.columns)}")
+    print(f"Final dataset shape: {X.shape}")
+    print(f"Target variable statistics:")
+    print(f"  Mean: {y.mean():.2f}")
+    print(f"  Std: {y.std():.2f}")
+    print(f"  Min: {y.min():.2f}")
+    print(f"  Max: {y.max():.2f}")
     
     return X, y
 
 
-def train_random_forest(
-    X: pd.DataFrame, 
-    y: pd.Series,
-    test_size: float = 0.2,
-    random_state: int = 42,
-    tune_hyperparameters: bool = True,
-    cv_folds: int = 5
-) -> Tuple[RandomForestRegressor, Dict[str, float]]:
+def train_random_forest(X: pd.DataFrame, y: pd.Series, 
+                       test_size: float = 0.2, 
+                       random_state: int = 42,
+                       tune_hyperparameters: bool = True) -> Dict:
     """
-    Train Random Forest model with optional hyperparameter tuning.
+    Train a Random Forest model with optional hyperparameter tuning.
     
     Args:
         X: Feature matrix
-        y: Target vector  
-        test_size: Fraction of data for testing
+        y: Target vector
+        test_size: Proportion of data for testing
         random_state: Random seed for reproducibility
-        tune_hyperparameters: Whether to perform grid search for optimal parameters
-        cv_folds: Number of cross-validation folds
+        tune_hyperparameters: Whether to perform hyperparameter tuning
         
     Returns:
-        Tuple of (trained model, performance metrics dict)
+        Dictionary containing trained model and evaluation results
     """
+    print("Training Random Forest model...")
+    
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state
     )
     
-    print(f"Training set: {X_train.shape[0]} samples")
-    print(f"Test set: {X_test.shape[0]} samples")
+    print(f"Training set size: {X_train.shape[0]}")
+    print(f"Test set size: {X_test.shape[0]}")
     
     if tune_hyperparameters:
         print("Performing hyperparameter tuning...")
         
-        # Define parameter grid
+        # Define hyperparameter grid
         param_grid = {
             'n_estimators': [100, 200, 300],
-            'max_depth': [10, 20, None],
+            'max_depth': [10, 20, 30, None],
             'min_samples_split': [2, 5, 10],
             'min_samples_leaf': [1, 2, 4],
             'max_features': ['sqrt', 'log2', None]
         }
         
-        # Grid search with cross-validation
-        rf_grid = GridSearchCV(
-            RandomForestRegressor(random_state=random_state),
-            param_grid,
-            cv=cv_folds,
-            scoring='r2',
-            n_jobs=-1,
-            verbose=1
+        # Create base model
+        rf = RandomForestRegressor(random_state=random_state)
+        
+        # Perform grid search
+        grid_search = GridSearchCV(
+            rf, param_grid, cv=5, scoring='neg_mean_squared_error', 
+            n_jobs=-1, verbose=1
         )
         
-        rf_grid.fit(X_train, y_train)
-        rf_model = rf_grid.best_estimator_
+        grid_search.fit(X_train, y_train)
         
-        print(f"Best parameters: {rf_grid.best_params_}")
-        print(f"Best CV score: {rf_grid.best_score_:.4f}")
+        # Get best model
+        best_model = grid_search.best_estimator_
+        best_params = grid_search.best_params_
+        
+        print(f"Best parameters: {best_params}")
+        print(f"Best CV score: {-grid_search.best_score_:.4f}")
         
     else:
-        # Use default parameters with some optimization
-        rf_model = RandomForestRegressor(
+        print("Using default hyperparameters...")
+        # Use default parameters with some sensible adjustments
+        best_model = RandomForestRegressor(
             n_estimators=200,
             max_depth=20,
             min_samples_split=5,
@@ -192,200 +225,187 @@ def train_random_forest(
             random_state=random_state,
             n_jobs=-1
         )
-        
-        print("Training Random Forest with default parameters...")
-        rf_model.fit(X_train, y_train)
+        best_params = best_model.get_params()
+        best_model.fit(X_train, y_train)
     
-    # Evaluate model
-    metrics = evaluate_model(rf_model, X_train, X_test, y_train, y_test, X.columns)
-    
-    return rf_model, metrics
-
-
-def evaluate_model(
-    model: RandomForestRegressor,
-    X_train: pd.DataFrame,
-    X_test: pd.DataFrame, 
-    y_train: pd.Series,
-    y_test: pd.Series,
-    feature_names: list
-) -> Dict[str, float]:
-    """
-    Comprehensive model evaluation with metrics and visualizations.
-    
-    Args:
-        model: Trained Random Forest model
-        X_train, X_test: Training and test feature sets
-        y_train, y_test: Training and test target values
-        feature_names: List of feature names
-        
-    Returns:
-        Dictionary of performance metrics
-    """
-    # Predictions
-    y_train_pred = model.predict(X_train)
-    y_test_pred = model.predict(X_test)
+    # Make predictions
+    y_pred_train = best_model.predict(X_train)
+    y_pred_test = best_model.predict(X_test)
     
     # Calculate metrics
-    metrics = {
-        'train_r2': r2_score(y_train, y_train_pred),
-        'test_r2': r2_score(y_test, y_test_pred),
-        'train_rmse': np.sqrt(mean_squared_error(y_train, y_train_pred)),
-        'test_rmse': np.sqrt(mean_squared_error(y_test, y_test_pred)),
-        'train_mae': mean_absolute_error(y_train, y_train_pred),
-        'test_mae': mean_absolute_error(y_test, y_test_pred),
-        'n_features': len(feature_names),
-        'n_train': len(y_train),
-        'n_test': len(y_test)
-    }
+    train_r2 = r2_score(y_train, y_pred_train)
+    test_r2 = r2_score(y_test, y_pred_test)
+    train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train))
+    test_rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    train_mae = mean_absolute_error(y_train, y_pred_train)
+    test_mae = mean_absolute_error(y_test, y_pred_test)
     
     # Print results
-    print(f"\n{'='*50}")
-    print("MODEL PERFORMANCE METRICS")
-    print(f"{'='*50}")
-    print(f"Training R²: {metrics['train_r2']:.4f}")
-    print(f"Test R²: {metrics['test_r2']:.4f}")
-    print(f"Training RMSE: {metrics['train_rmse']:.4f}")
-    print(f"Test RMSE: {metrics['test_rmse']:.4f}")
-    print(f"Training MAE: {metrics['train_mae']:.4f}")
-    print(f"Test MAE: {metrics['test_mae']:.4f}")
+    print("\n" + "="*50)
+    print("RANDOM FOREST MODEL RESULTS")
+    print("="*50)
+    print(f"Training R²: {train_r2:.4f}")
+    print(f"Test R²: {test_r2:.4f}")
+    print(f"Training RMSE: {train_rmse:.2f}")
+    print(f"Test RMSE: {test_rmse:.2f}")
+    print(f"Training MAE: {train_mae:.2f}")
+    print(f"Test MAE: {test_mae:.2f}")
     
-    # Feature importances
-    plot_feature_importance(model, feature_names)
-    
-    # Actual vs predicted plot
-    plot_predictions(y_test, y_test_pred, metrics['test_r2'])
-    
-    return metrics
-
-
-def plot_feature_importance(model: RandomForestRegressor, feature_names: list, top_n: int = 15, save_path: str = "../models/feature_importance.png"):
-    """Plot feature importances from trained Random Forest model."""
-    importances = model.feature_importances_
-    feature_importance_df = pd.DataFrame({
-        'feature': feature_names,
-        'importance': importances
+    # Feature importance
+    feature_importance = pd.DataFrame({
+        'feature': X.columns,
+        'importance': best_model.feature_importances_
     }).sort_values('importance', ascending=False)
     
-    plt.figure(figsize=(10, 8))
-    sns.barplot(
-        data=feature_importance_df.head(top_n),
-        x='importance',
-        y='feature',
-        palette='viridis'
-    )
-    plt.title(f'Top {top_n} Feature Importances - Random Forest Model')
-    plt.xlabel('Importance')
-    plt.tight_layout()
+    print("\nTop 10 Most Important Features:")
+    print(feature_importance.head(10).to_string(index=False))
     
-    # Save the plot
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Feature importance plot saved to: {save_path}")
-    plt.close()
-    
-    print(f"\nTop {top_n} most important features:")
-    for _, row in feature_importance_df.head(top_n).iterrows():
-        print(f"{row['feature']}: {row['importance']:.4f}")
-
-
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/predictions_plot.png"):
-    """Plot actual vs predicted values with perfect prediction line."""
-    plt.figure(figsize=(10, 8))
-    plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
-    
-    # Perfect prediction line
-    min_val = min(y_true.min(), y_pred.min())
-    max_val = max(y_true.max(), y_pred.max())
-    plt.plot([min_val, max_val], [min_val, max_val], '--r', linewidth=2, label='Perfect Prediction')
-    
-    plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
-    plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
-    plt.title(f'Actual vs Predicted BNPP (R² = {r2:.4f})')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    # Save the plot
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Predictions plot saved to: {save_path}")
-    plt.close()
-
-
-def save_model(model: RandomForestRegressor, metrics: Dict, output_path: str = "../models/rf_model.pkl"):
-    """Save trained model and metrics to disk."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    model_data = {
-        'model': model,
-        'metrics': metrics,
-        'feature_names': list(model.feature_names_in_) if hasattr(model, 'feature_names_in_') else None,
-        'feature_importances': model.feature_importances_ if hasattr(model, 'feature_importances_') else None
+    # Package results
+    results = {
+        'model': best_model,
+        'best_params': best_params,
+        'feature_names': list(X.columns),
+        'train_r2': train_r2,
+        'test_r2': test_r2,
+        'train_rmse': train_rmse,
+        'test_rmse': test_rmse,
+        'train_mae': train_mae,
+        'test_mae': test_mae,
+        'feature_importance': feature_importance,
+        'X_train': X_train,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_test': y_test,
+        'y_pred_train': y_pred_train,
+        'y_pred_test': y_pred_test
     }
     
-    with open(output_path, 'wb') as f:
-        pickle.dump(model_data, f)
+    return results
+
+
+def save_model_and_results(results: Dict, output_dir: str = "random_forest", suffix: str = "") -> None:
+    """
+    Save the trained model and generate evaluation plots.
     
-    print(f"Model saved to: {output_path}")
+    Args:
+        results: Dictionary containing model and evaluation results
+        output_dir: Directory to save outputs
+        suffix: Suffix to add to output filenames
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save model summary as text file
-    summary_path = output_path.parent / "model_summary.txt"
+    # Save model
+    model_path = output_dir / f"rf_model{suffix}.pkl"
+    with open(model_path, 'wb') as f:
+        pickle.dump(results['model'], f)
+    print(f"Model saved to: {model_path}")
+    
+    # Save feature importance plot
+    plt.figure(figsize=(12, 8))
+    top_features = results['feature_importance'].head(15)
+    plt.barh(range(len(top_features)), top_features['importance'])
+    plt.yticks(range(len(top_features)), top_features['feature'])
+    plt.xlabel('Feature Importance')
+    plt.title('Random Forest Feature Importance')
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    importance_path = output_dir / f"rf_feature_importance{suffix}.png"
+    plt.savefig(importance_path, dpi=300, bbox_inches='tight')
+    print(f"Feature importance plot saved to: {importance_path}")
+    plt.close()
+    
+    # Save predictions plot
+    plt.figure(figsize=(12, 5))
+    
+    # Training predictions
+    plt.subplot(1, 2, 1)
+    plt.scatter(results['y_train'], results['y_pred_train'], alpha=0.6)
+    plt.plot([results['y_train'].min(), results['y_train'].max()],
+             [results['y_train'].min(), results['y_train'].max()], 'r--', lw=2)
+    plt.xlabel('Actual BNPP Fraction')
+    plt.ylabel('Predicted BNPP Fraction')
+    plt.title(f'Training Set (R² = {results["train_r2"]:.3f})')
+    plt.grid(True, alpha=0.3)
+
+    # Test predictions
+    plt.subplot(1, 2, 2)
+    plt.scatter(results['y_test'], results['y_pred_test'], alpha=0.6)
+    plt.plot([results['y_test'].min(), results['y_test'].max()],
+             [results['y_test'].min(), results['y_test'].max()], 'r--', lw=2)
+    plt.xlabel('Actual BNPP Fraction')
+    plt.ylabel('Predicted BNPP Fraction')
+    plt.title(f'Test Set (R² = {results["test_r2"]:.3f})')
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    pred_path = output_dir / f"rf_predictions_plot{suffix}.png"
+    plt.savefig(pred_path, dpi=300, bbox_inches='tight')
+    print(f"Predictions plot saved to: {pred_path}")
+    plt.close()
+    
+    # Save model summary
+    summary_path = output_dir / f"rf_model_summary{suffix}.txt"
     with open(summary_path, 'w') as f:
         f.write("Random Forest Model Summary\n")
-        f.write("=" * 50 + "\n\n")
-        f.write(f"Model Performance:\n")
-        f.write(f"Training R²: {metrics['train_r2']:.4f}\n")
-        f.write(f"Test R²: {metrics['test_r2']:.4f}\n")
-        f.write(f"Training RMSE: {metrics['train_rmse']:.4f}\n")
-        f.write(f"Test RMSE: {metrics['test_rmse']:.4f}\n")
-        f.write(f"Training MAE: {metrics['train_mae']:.4f}\n")
-        f.write(f"Test MAE: {metrics['test_mae']:.4f}\n\n")
+        f.write("="*40 + "\n\n")
+        f.write(f"Dataset size: {len(results['X_train']) + len(results['X_test'])} samples\n")
+        f.write(f"Features: {len(results['feature_names'])}\n")
+        f.write("Geographic features (lat, lon) excluded from training\n")
+        f.write(f"Training samples: {len(results['X_train'])}\n")
+        f.write(f"Test samples: {len(results['X_test'])}\n\n")
         
-        f.write(f"Dataset Information:\n")
-        f.write(f"Number of features: {metrics['n_features']}\n")
-        f.write(f"Training samples: {metrics['n_train']}\n")
-        f.write(f"Test samples: {metrics['n_test']}\n\n")
+        f.write("Model Performance:\n")
+        f.write(f"Training R²: {results['train_r2']:.4f}\n")
+        f.write(f"Test R²: {results['test_r2']:.4f}\n")
+        f.write(f"Training RMSE: {results['train_rmse']:.4f}\n")
+        f.write(f"Test RMSE: {results['test_rmse']:.4f}\n")
+        f.write(f"Training MAE: {results['train_mae']:.4f}\n")
+        f.write(f"Test MAE: {results['test_mae']:.4f}\n\n")
         
-        if model_data['feature_names'] and model_data['feature_importances'] is not None:
-            f.write(f"Feature Importances:\n")
-            feature_imp = list(zip(model_data['feature_names'], model_data['feature_importances']))
-            feature_imp.sort(key=lambda x: x[1], reverse=True)
-            for feature, importance in feature_imp:
-                f.write(f"{feature}: {importance:.4f}\n")
+        f.write("Best Hyperparameters:\n")
+        for param, value in results['best_params'].items():
+            f.write(f"{param}: {value}\n")
+        f.write("\n")
+        
+        f.write("Feature Importance (Top 10):\n")
+        for _, row in results['feature_importance'].head(10).iterrows():
+            f.write(f"{row['feature']}: {row['importance']:.4f}\n")
     
     print(f"Model summary saved to: {summary_path}")
 
 
-
 def main():
-    """
-    Main function for standalone execution of RF model training.
-    Loads data, trains model, and evaluates performance.
-    """
+    """Main function to train and evaluate Random Forest model for BNPP_fraction prediction."""
+    print("Random Forest BNPP Fraction Prediction Model (No Geographic Features)")
+    print("="*70)
+
     try:
-        # Load integrated data
+        # Load data
         df = load_integrated_data()
-        
-        # Prepare features and target
-        X, y = prepare_features_target(df)
-        
+
+        # Prepare features and target (without geographic coordinates)
+        X, y = prepare_features_target(df, target_col='BNPP_fraction', use_geographic=False)
+
         # Train model
-        model, metrics = train_random_forest(X, y, tune_hyperparameters=False)
-        
-        # Save model
-        save_model(model, metrics)
-        
-        print("\nRandom Forest training completed successfully!")
-        
+        results = train_random_forest(X, y, tune_hyperparameters=True)
+
+        # Save results with updated naming
+        save_model_and_results(results, output_dir="random_forest_bnpp_fraction", suffix="")
+
+        print("\n" + "="*70)
+        print("TRAINING COMPLETE")
+        print("="*70)
+        print("Model files saved in: random_forest_bnpp_fraction/")
+        print("- rf_model.pkl: Trained Random Forest model for BNPP_fraction")
+        print("- rf_feature_importance.png: Feature importance plot")
+        print("- rf_predictions_plot.png: Predictions scatter plot")
+        print("- rf_model_summary.txt: Model performance summary")
+
     except Exception as e:
-        print(f"Error in RF model training: {e}")
-        return False
-    
-    return True
+        print(f"Error during training: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

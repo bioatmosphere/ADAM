@@ -1,33 +1,36 @@
-""" 
-Aggregate processed data from different sources into a single dataset for machine learing.
+"""
+Aggregate processed data from different sources into a single dataset for machine learning.
 
-This script fetches data from various sources, processes them, and aggregate them into a single DataFrame
-    for machine learning (deep learning) next.
+This script fetches data from various sources, processes them, and aggregates them into a single DataFrame
+    for machine learning next.
 
 What it does:
-    - Reads processed grassland and forest BNPP data from CSV files.
-    - Performs unit conversions to standardize BNPP measurements:
+    - Reads processed grassland and forest productivity data from CSV files
+    - Handles multiple productivity metrics:
+        * BNPP (Below-ground Net Primary Productivity)
+        * ANPP (Above-ground Net Primary Productivity)
+        * TNPP (Total Net Primary Productivity)
+        * BNPP_fraction (BNPP/TNPP ratio)
+    - Performs unit conversions to standardize measurements:
         * Forest data: Mg C ha⁻¹ yr⁻¹ → g C m⁻² yr⁻¹ (×100 conversion factor)
         * Grassland data: g m⁻² yr⁻¹ (assuming carbon equivalent)
-    - Renames columns to ensure consistency across datasets.
-    - Combines the data into a single DataFrame.
-    - Plots the spatial distribution of data points on a map.
+    - Renames columns to ensure consistency across datasets
+    - Combines the data into a single DataFrame
+    - Plots the spatial distribution of data points on a map
+    - Includes outlier detection and removal capabilities
 
-**NOTE**: It extracts the latitude and longitude of data points to be used for extracting
-    data from the ancillary data sources like weather, soil, and other environmental data.
-    
-The data sources include:
-    - grassland BNPP data: processed from Dryad global grassland database (grassland_bnpp_data.csv)
-    - forest BNPP data: processed from ForC database (ForC_BNPP_root_C_processed.csv)
-    - other potential sources in the future.
-    - ancillary data from various sources:
-        * TerraClimate: climate variables (aet, pet, ppt, tmax, tmin, vpd)
-        * GLASS: Gross Primary Production (GPP) satellite data from yearly aggregations
-        * SoilGrids: soil properties (carbon stock, texture, nutrients, pH, bulk density)
-        * Soil Moisture: EC ORS dataset (volumetric water content)
-        * Elevation: SRTM-based elevation data (meters above sea level)
+**NOTE**: Latitude and longitude coordinates are extracted and saved separately for potential
+    use in extracting ancillary environmental data from external sources.
 
-Check out https://github.com/NVIDIA-Omniverse-blueprints/earth2-weather-analytics 
+Data sources (default):
+    - Grassland productivity: processed from Dryad global grassland database (~953 samples)
+    - Forest productivity: EXPANDED ForC database (~5,634 samples with multiple BNPP/ANPP components)
+    - TerraClimate: climate variables (aet, pet, ppt, tmax, tmin, vpd)
+    - SoilGrids: soil properties (carbon stock, texture, nutrients, pH, bulk density)
+    - Soil Moisture: EC ORS dataset (volumetric water content)
+    - Elevation: SRTM-based elevation data (meters above sea level)
+
+Check out https://github.com/NVIDIA-Omniverse-blueprints/earth2-weather-analytics
     for inspirations for structure and data sources.
 
 MCP: https://claude.ai/share/1d62b6fc-271b-422f-8c0d-f9be2efdd8ed
@@ -58,18 +61,21 @@ except ImportError:
     SCIPY_AVAILABLE = False
 
 def process_productivity_data(df):
-    """Process grassland/forest productivity data with standard column renaming and unit conversion."""
+    """Process grassland/forest productivity data with standard column renaming and unit conversion.
+
+    Handles BNPP, ANPP, TNPP, and BNPP_fraction columns from both grassland and forest datasets.
+    """
     # Make column names consistent
     if 'Latitude' in df.columns and 'Longitude' in df.columns:
         df.rename(columns={'Latitude': 'lat', 'Longitude': 'lon'}, inplace=True)
-    
+
     # Handle BNPP column - different names in grassland vs forest data
     if 'mean' in df.columns:
         df.rename(columns={'mean': 'BNPP'}, inplace=True)
     elif 'BNPP' in df.columns:
         # Grassland data already has BNPP column
         pass
-    
+
     # Handle biome/ecosystem type columns
     if 'dominant.veg' in df.columns:
         df.rename(columns={'dominant.veg': 'biome'}, inplace=True)
@@ -77,7 +83,11 @@ def process_productivity_data(df):
         df.rename(columns={'dominant.life.form': 'biome'}, inplace=True)
     elif 'Grassland type' in df.columns:
         df.rename(columns={'Grassland type': 'biome'}, inplace=True)
-    
+    elif 'FAO.ecozone' in df.columns:
+        df.rename(columns={'FAO.ecozone': 'biome'}, inplace=True)
+    elif 'biogeog' in df.columns:
+        df.rename(columns={'biogeog': 'biome'}, inplace=True)
+
     # Determine data source and handle unit conversions
     data_source = None
     if 'Data_Source' in df.columns:
@@ -87,9 +97,9 @@ def process_productivity_data(df):
             data_source = 'forest'
     elif 'Variable_Name' in df.columns and 'BNPP_root_C' in str(df['Variable_Name'].iloc[0]):
         data_source = 'forest'
-    elif 'Grassland type' in df.columns:
+    elif 'Grassland type' in df.columns or 'biome' in df.columns:
         data_source = 'grassland'
-    
+
     # Unit conversions to standardize BNPP values
     if 'BNPP' in df.columns and data_source:
         if data_source == 'forest':
@@ -103,13 +113,41 @@ def process_productivity_data(df):
             # If not carbon-specific, we may need additional conversion factors
             df['BNPP_units'] = 'g m⁻² yr⁻¹'
             print(f"Grassland BNPP units: g m⁻² yr⁻¹ (assuming carbon equivalent)")
-    
+
+    # Handle ANPP column if present
+    if 'ANPP' in df.columns and data_source:
+        if data_source == 'forest':
+            # Convert forest ANPP from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹
+            df['ANPP'] = df['ANPP'] * 100
+            df['ANPP_units'] = 'g C m⁻² yr⁻¹'
+            print(f"Converted forest ANPP from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹")
+        elif data_source == 'grassland':
+            # ANPP is already in g/m²/year for grassland data
+            df['ANPP_units'] = 'g m⁻² yr⁻¹'
+            print(f"Grassland ANPP units: g m⁻² yr⁻¹")
+
+    # Handle TNPP column if present
+    if 'TNPP' in df.columns and data_source:
+        if data_source == 'forest':
+            # Convert forest TNPP from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹
+            df['TNPP'] = df['TNPP'] * 100
+            df['TNPP_units'] = 'g C m⁻² yr⁻¹'
+            print(f"Converted forest TNPP from Mg C ha⁻¹ yr⁻¹ to g C m⁻² yr⁻¹")
+        elif data_source == 'grassland':
+            # TNPP is already in g/m²/year for grassland data
+            df['TNPP_units'] = 'g m⁻² yr⁻¹'
+            print(f"Grassland TNPP units: g m⁻² yr⁻¹")
+
+    # BNPP_fraction should already be calculated in grassland data
+    if 'BNPP_fraction' in df.columns:
+        print(f"BNPP fraction (BNPP/TNPP) found in dataset")
+
     # Add data source identifier
     if data_source:
         df['data_source'] = data_source
     elif 'data_source' not in df.columns:
         df['data_source'] = 'productivity'
-    
+
     return df
 
 def process_terraclimate_data(df, file_path):
@@ -232,7 +270,7 @@ def process_elevation_data(df, file_path):
     
     return df
 
-def detect_statistical_outliers(df, column='BNPP', method='iqr', multiplier=1.5):
+def detect_statistical_outliers(df, column='BNPP', method='iqr', multiplier=2.5):
     """
     Detect statistical outliers in BNPP data using various methods.
     
@@ -769,9 +807,17 @@ def aggregate_data(data_files=[]):
         integrated_df = pd.concat(climate_dataframes, ignore_index=True)
     
     if integrated_df is not None and len(integrated_df) > 0:
-        # Filter to keep only essential columns: lat, lon, biome, productivity, and climate data
+        # Filter to keep only essential columns: lat, lon, biome, productivity, metadata, and climate data
         essential_columns = ['lat', 'lon']
-        
+
+        # Add location metadata columns
+        metadata_cols = [col for col in integrated_df.columns if col in [
+            'Location', 'Country', 'Continent', 'Site_ID', 'Entry_ID'
+        ]]
+        if metadata_cols:
+            essential_columns.extend(metadata_cols)
+            print(f"Found metadata columns: {metadata_cols}")
+
         # Add biome column (ecosystem type)
         biome_cols = [col for col in integrated_df.columns if col in ['biome', 'ecosystem', 'vegetation_type', 'land_cover']]
         if biome_cols:
@@ -780,23 +826,32 @@ def aggregate_data(data_files=[]):
         else:
             print("Warning: No biome column found")
         
-        # Add productivity column (BNPP or similar)
-        productivity_cols = [col for col in integrated_df.columns if col in ['BNPP', 'mean', 'productivity']]
+        # Add productivity columns (BNPP, ANPP, TNPP, BNPP_fraction)
+        productivity_cols = [col for col in integrated_df.columns if col in [
+            'BNPP', 'ANPP', 'TNPP', 'BNPP_fraction', 'mean', 'productivity'
+        ]]
         if productivity_cols:
             essential_columns.extend(productivity_cols)
-            print(f"Found productivity column: {productivity_cols}")
-            # Also include units column if available
-            if 'BNPP_units' in integrated_df.columns:
-                essential_columns.append('BNPP_units')
+            print(f"Found productivity columns: {productivity_cols}")
+            # Also include units columns if available
+            unit_cols = [col for col in integrated_df.columns if col in [
+                'BNPP_units', 'ANPP_units', 'TNPP_units'
+            ]]
+            essential_columns.extend(unit_cols)
+            # Include standard error columns if available
+            se_cols = [col for col in integrated_df.columns if col in [
+                'BNPP_SE', 'ANPP_SE'
+            ]]
+            essential_columns.extend(se_cols)
         else:
             print("Warning: No productivity column found. Looking for numeric columns...")
             # Fallback: look for numeric columns that might represent productivity
             numeric_cols = integrated_df.select_dtypes(include=[np.number]).columns
             potential_prod_cols = [col for col in numeric_cols if col not in [
-                'lat', 'lon', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly', 
-                'Entry_ID', 'Altitude', 'Sampling year', 'BNPP_SE', 'MAT', 'MAP', 'stand.age', 'masl',
-                'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content', 
-                'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water', 
+                'lat', 'lon', 'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
+                'Entry_ID', 'Altitude', 'Sampling year', 'MAT', 'MAP', 'stand.age', 'masl',
+                'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+                'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
                 'bulk_density', 'coarse_fragments', 'soil_moisture'
             ]]
             if potential_prod_cols:
@@ -804,7 +859,7 @@ def aggregate_data(data_files=[]):
                 print(f"Using {potential_prod_cols[0]} as productivity measure")
         
         # Add climate variables
-        climate_cols = [col for col in integrated_df.columns if col in ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly']]
+        climate_cols = [col for col in integrated_df.columns if col in ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd']]
         essential_columns.extend(climate_cols)
         
         # Add soil variables
@@ -945,16 +1000,15 @@ def plot_data_distribution(df):
 
 def main():
     parser = argparse.ArgumentParser(description='Aggregate data from different sources for machine learning')
-    parser.add_argument('--files', '-f', nargs='+', 
-                       default=['grassland/grassland_bnpp_data.csv',
-                                'forc/ForC_BNPP_root_C_processed.csv',
+    parser.add_argument('--files', '-f', nargs='+',
+                       default=['grassland/grassland_productivity_data.csv',
+                                'forc/ForC_BNPP_ANPP_TNPP_expanded.csv',
                                 '../ancillary/terraclimate/point_extractions/aet_means.csv',
                                 '../ancillary/terraclimate/point_extractions/pet_means.csv',
                                 '../ancillary/terraclimate/point_extractions/ppt_means.csv',
                                 '../ancillary/terraclimate/point_extractions/tmax_means.csv',
                                 '../ancillary/terraclimate/point_extractions/tmin_means.csv',
                                 '../ancillary/terraclimate/point_extractions/vpd_means.csv',
-                                '../ancillary/glass/point_extractions/GPP_YEARLY_all_points.csv',
                                 '../ancillary/soilgrids/soil_carbon_points.csv',
                                 '../ancillary/soilgrids/clay_data_points.csv',
                                 '../ancillary/soilgrids/silt_data_points.csv',
@@ -966,7 +1020,7 @@ def main():
                                 '../ancillary/soilgrids/coarse_fragments_data_points.csv',
                                 '../ancillary/soilmoisture/soil_moisture_points.csv',
                                 '../ancillary/elevation_points.csv'],
-                       help='List of data files to aggregate (default: grassland, forest, terraclimate, GLASS GPP, SoilGrids, soil moisture, and elevation files)')
+                       help='List of data files to aggregate (default: grassland and forest productivity data with all ancillary climate, soil, and elevation data)')
     parser.add_argument('--no-plot', action='store_true',
                        help='Skip plotting the data distribution')
     parser.add_argument('--output-dir', '-o', type=str, default='../productivity',

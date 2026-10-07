@@ -80,6 +80,16 @@ def get_glass_product_info():
             'url_pattern': 'https://www.glass.hku.hk/MOD_GLASS02_LAI/{year}/MOD_GLASS02_LAI.A{year}{doy}.hdf',
             'colormap': 'viridis'
         },
+        'LAI_500M': {
+            'name': 'Leaf Area Index (500m)',
+            'units': 'm²/m²',
+            'resolution': '500m',
+            'temporal_resolution': '8-day',
+            'time_range': '2000-2024',
+            'url_pattern': 'https://www.glass.hku.hk/archive/LAI/MODIS/500M/{year}/{doy}/',
+            'colormap': 'viridis',
+            'tile_based': True
+        },
         'FAPAR': {
             'name': 'Fraction of Absorbed PAR',
             'units': 'fraction',
@@ -985,8 +995,9 @@ def extract_glass_point_data(data_dir, coordinates, products=None, start_year=No
         product_name = product_dir.name
         print(f"Processing {product_name} data...")
         
-        # Find relevant HDF files
-        hdf_files = list(product_dir.glob("*.hdf"))
+        # Find relevant HDF files (search in subdirectories too)
+        hdf_files = list(product_dir.glob("*.hdf"))  # Direct files
+        hdf_files.extend(list(product_dir.glob("*/*.hdf")))  # Files in subdirectories
         if start_year and end_year:
             filtered_files = []
             for f in hdf_files:
@@ -1003,8 +1014,8 @@ def extract_glass_point_data(data_dir, coordinates, products=None, start_year=No
         if not hdf_files:
             continue
         
-        # Sample files to avoid processing too many
-        sample_files = hdf_files[::max(1, len(hdf_files) // 20)]  # Sample every 20th file
+        # Process all available files (remove sampling to get complete data)
+        sample_files = hdf_files  # Process all files instead of sampling
         
         for hdf_file in tqdm(sample_files, desc=f"Processing {product_name}"):
             try:
@@ -1036,41 +1047,159 @@ def extract_from_hdf_file(hdf_file, product_name, points_data):
         points_data (dict): Dictionary to store extracted data
     """
     try:
-        # Try to open with xarray
-        with xr.open_dataset(hdf_file, engine='h5netcdf') as ds:
-            data_vars = list(ds.data_vars.keys())
-            if not data_vars:
-                return
+        # Import pyhdf for HDF4 files
+        from pyhdf import SD
+        import numpy as np
+        
+        # Open HDF4 file
+        hdf = SD.SD(str(hdf_file), SD.SDC.READ)
+        
+        # Get dataset (use product name or try common dataset names)
+        dataset_names = list(hdf.datasets().keys())
+        if not dataset_names:
+            print(f"  Warning: No datasets found in {hdf_file.name}")
+            hdf.end()
+            return
             
-            data_var = data_vars[0]
-            data = ds[data_var]
+        # Map product directory names to dataset names
+        dataset_name_map = {
+            'GPP_YEARLY': 'GPP',
+            'GPP': 'GPP',
+            'LAI': 'LAI',
+            'FAPAR': 'FAPAR',
+            'NDVI': 'NDVI',
+            'EVI': 'EVI'
+        }
+        
+        dataset_name = dataset_name_map.get(product_name, dataset_names[0])
+        
+        try:
+            dataset = hdf.select(dataset_name)
+        except:
+            # Fallback to first available dataset
+            dataset = hdf.select(dataset_names[0])
+            print(f"  Using dataset: {dataset_names[0]} instead of {product_name}")
+        
+        # Read data and attributes
+        raw_data = dataset.get()
+        attrs = dataset.attributes()
+        
+        # Get geolocation info (MODIS sinusoidal projection)
+        # Extract tile info from filename (e.g., h21v07)
+        filename = hdf_file.stem
+        parts = filename.split('.')
+        tile_part = None
+        for part in parts:
+            if part.startswith('h') and 'v' in part and len(part) == 6:
+                tile_part = part
+                break
+        
+        if not tile_part:
+            print(f"  Warning: Could not extract tile info from {hdf_file.name}")
+            dataset.endaccess()
+            hdf.end()
+            return
             
-            # Extract date from filename
-            filename = hdf_file.stem
-            date_str = filename.split('.')[-2] if '.' in filename else filename[-7:]
+        # Extract tile coordinates
+        h_tile = int(tile_part[1:3])
+        v_tile = int(tile_part[4:6])
+        
+        # MODIS sinusoidal projection parameters
+        EARTH_RADIUS = 6371007.181
+        # Determine tile size based on actual data dimensions
+        data_shape = raw_data.shape
+        if data_shape[0] == 2400 and data_shape[1] == 2400:
+            TILE_SIZE = 2400  # 500m resolution
+            PIXEL_SIZE = 500  # meters
+        elif data_shape[0] == 1200 and data_shape[1] == 1200:
+            TILE_SIZE = 1200  # 1km resolution  
+            PIXEL_SIZE = 1000  # meters
+        else:
+            print(f"  Warning: Unexpected data dimensions {data_shape} in {hdf_file.name}")
+            TILE_SIZE = data_shape[0]
+            PIXEL_SIZE = 1000  # default to 1km
             
-            # Extract data for each point
-            for point_name, point_info in points_data.items():
-                lat, lon = point_info['latitude'], point_info['longitude']
+        # Calculate tile boundaries in sinusoidal coordinates
+        tile_width = TILE_SIZE * PIXEL_SIZE  # Total tile width in meters
+        x_min = (h_tile - 18) * tile_width
+        x_max = x_min + tile_width
+        y_max = (9 - v_tile) * tile_width
+        y_min = y_max - tile_width
+        
+        # Extract date from filename
+        date_str = None
+        for part in parts:
+            if part.startswith('A') and len(part) == 8:  # A2010001 format
+                date_str = part[1:]  # Remove 'A' prefix
+                break
+        
+        if not date_str:
+            print(f"  Warning: Could not extract date from {hdf_file.name}")
+            dataset.endaccess()
+            hdf.end()
+            return
+        
+        # Process data attributes
+        fill_value = attrs.get('_FillValue', 65535)
+        scale_factor = attrs.get('scale_factor', 1.0)
+        add_offset = attrs.get('add_offset', 0.0)
+        
+        # Convert raw data to proper values
+        data = raw_data.astype(np.float32)
+        valid_mask = data != fill_value
+        data[valid_mask] = data[valid_mask] * scale_factor + add_offset
+        data[~valid_mask] = np.nan
+        
+        # Extract data for each point
+        points_extracted = 0
+        for point_name, point_info in points_data.items():
+            lat, lon = point_info['latitude'], point_info['longitude']
+            
+            try:
+                # Convert lat/lon to sinusoidal coordinates
+                lon_rad = np.radians(lon)
+                lat_rad = np.radians(lat)
                 
-                try:
-                    # Find nearest grid point
-                    point_data = data.sel(lat=lat, lon=lon, method='nearest')
-                    value = float(point_data.values)
-                    
-                    # Initialize product data if not exists
-                    if product_name not in point_info['data']:
-                        point_info['data'][product_name] = {}
-                    
-                    # Store data
-                    point_info['data'][product_name][date_str] = value
-                    
-                except Exception:
+                x = EARTH_RADIUS * lon_rad * np.cos(lat_rad)
+                y = EARTH_RADIUS * lat_rad
+                
+                # Check if point is within tile bounds
+                if x < x_min or x > x_max or y < y_min or y > y_max:
                     continue
+                
+                # Calculate pixel coordinates within tile
+                col = int((x - x_min) / (tile_width / TILE_SIZE))
+                row = int((y_max - y) / (tile_width / TILE_SIZE))
+                
+                # Check bounds
+                if 0 <= row < data.shape[0] and 0 <= col < data.shape[1]:
+                    value = data[row, col]
                     
-    except Exception:
-        # Silently skip files that can't be processed
-        pass
+                    if not np.isnan(value):
+                        # Initialize product data if not exists
+                        if product_name not in point_info['data']:
+                            point_info['data'][product_name] = {}
+                        
+                        # Store data
+                        point_info['data'][product_name][date_str] = value
+                        points_extracted += 1
+                        
+            except Exception as e:
+                print(f"  Warning: Error extracting point {point_name}: {e}")
+                continue
+        
+        if points_extracted > 0:
+            print(f"  Extracted data for {points_extracted} points from {hdf_file.name}")
+        
+        dataset.endaccess()
+        hdf.end()
+        
+    except ImportError:
+        print(f"  Error: pyhdf library not available. Install with: pip install pyhdf")
+        return
+    except Exception as e:
+        print(f"  Error processing {hdf_file.name}: {e}")
+        return
 
 
 def save_glass_point_data_csv(points_data, output_dir):

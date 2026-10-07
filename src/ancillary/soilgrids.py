@@ -31,61 +31,87 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import rasterio
 
-def download_soilgrids_data(output_dir="./data", property_name="ocs", depth="0-30cm"):
+def download_soilgrids_data(output_dir="../../ancillary/soilgrids", property_name="ocs", depth="0-30cm",
+                           resolution=None):
     """
     Download and process SoilGrids data with optimized settings.
-    
+
     Args:
         output_dir (str): Directory to save the processed GeoTIFF
         property_name (str): Property to download ('ocs' for carbon, 'clay' for clay content)
         depth (str): Depth layer (e.g., '0-30cm', '0-5cm', '5-15cm', '15-30cm')
+        resolution (float): Target resolution in degrees (e.g., 0.5 for 0.5°).
+                           If None, downloads at native 250m resolution.
     """
     try:
         # Create output directory
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        
+
         # Configure GDAL settings for optimized output and faster download
-        # Set GDAL options for faster networking
-        gdal.SetConfigOption('GDAL_HTTP_TIMEOUT', '300')
-        gdal.SetConfigOption('GDAL_HTTP_LOW_SPEED_TIME', '30')
+        gdal.SetConfigOption('GDAL_HTTP_TIMEOUT', '600')
+        gdal.SetConfigOption('GDAL_HTTP_LOW_SPEED_TIME', '60')
         gdal.SetConfigOption('GDAL_HTTP_LOW_SPEED_LIMIT', '1000')
-        gdal.SetConfigOption('CPL_VSIL_CURL_CACHE_SIZE', '134217728')  # 128MB cache
-        gdal.SetConfigOption('VSI_CACHE_SIZE', '268435456')  # 256MB cache
-        
-        kwargs = {
-            'format': 'GTiff',
-            'creationOptions': [
-                "TILED=YES",          # Enable tiling for faster access
-                "COMPRESS=DEFLATE",   # Use compression
-                "PREDICTOR=2",        # Optimize compression for continuous data
-                "BIGTIFF=YES",        # Support large files
-                "NUM_THREADS=ALL_CPUS"  # Use all CPU cores
-            ]
-        }
-        
+        gdal.SetConfigOption('CPL_VSIL_CURL_CACHE_SIZE', '268435456')  # 256MB cache
+        gdal.SetConfigOption('VSI_CACHE_SIZE', '536870912')  # 512MB cache
+
         # Source VRT URL with optimized curl options
-        src_url = ('/vsicurl?max_retry=5&retry_delay=0.5&list_dir=no&'
-                   'timeout=300&low_speed_limit=1000&'
-                   'low_speed_time=30&url='
+        src_url = ('/vsicurl?max_retry=5&retry_delay=1&list_dir=no&'
+                   'timeout=600&low_speed_limit=1000&'
+                   'low_speed_time=60&url='
                    f'https://files.isric.org/soilgrids/latest/data/{property_name}/'
                    f'{property_name}_{depth}_mean.vrt')
-        
+
         # Output file path
-        property_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+        property_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
         filename = property_names.get(property_name, property_name)
-        output_file = os.path.join(output_dir, f'{filename}.tif')
-        
+
+        if resolution:
+            output_file = os.path.join(output_dir, f'{filename}_{resolution}deg.tif')
+        else:
+            output_file = os.path.join(output_dir, f'{filename}.tif')
+
         print(f"Downloading {property_name} data ({depth}) to: {output_file}")
-        
-        # Download and process the data using GDAL
-        print("Starting GDAL download and processing...")
-        ds = gdal.Translate(output_file, src_url, **kwargs)
-        
+
+        if resolution:
+            # Use gdal.Warp to resample to target resolution
+            print(f"Resampling to {resolution}° resolution...")
+
+            # Calculate output dimensions
+            width = int(360 / resolution)   # e.g., 720 for 0.5°
+            height = int(180 / resolution)  # e.g., 360 for 0.5°
+
+            warp_options = gdal.WarpOptions(
+                format='GTiff',
+                width=width,
+                height=height,
+                outputBounds=[-180, -90, 180, 90],
+                resampleAlg='average',
+                creationOptions=['COMPRESS=DEFLATE', 'TILED=YES', 'NUM_THREADS=ALL_CPUS'],
+                multithread=True
+            )
+
+            print("Starting GDAL warp (download + resample)...")
+            ds = gdal.Warp(output_file, src_url, options=warp_options)
+        else:
+            # Download at native resolution
+            kwargs = {
+                'format': 'GTiff',
+                'creationOptions': [
+                    "TILED=YES",
+                    "COMPRESS=DEFLATE",
+                    "PREDICTOR=2",
+                    "BIGTIFF=YES",
+                    "NUM_THREADS=ALL_CPUS"
+                ]
+            }
+            print("Starting GDAL download (native resolution)...")
+            ds = gdal.Translate(output_file, src_url, **kwargs)
+
         if ds is not None:
             print("Download completed successfully")
             del ds  # Close the dataset
             return True
-            
+
     except Exception as e:
         print(f"Error downloading SoilGrids data: {e}")
         return False
@@ -191,33 +217,33 @@ def extract_soil_data_for_points(lat_lon_file, output_file="soil_data_points.csv
                                 value = depths[0]['values']['mean']
                                 
                                 # Map property names to column names
-                                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
                                 column_name = prop_names.get(prop, prop)
                                 point_result[column_name] = value
                                 # print(f"Added {column_name} = {value}")  # Debug
                             else:
-                                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
                                 column_name = prop_names.get(prop, prop)
                                 point_result[column_name] = None
                                 # print(f"No values found for {prop}")  # Debug
                     else:
-                        prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                        prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
                         column_name = prop_names.get(prop, prop)
                         point_result[column_name] = None
                         # print(f"No properties/layers found for {prop}")  # Debug
                 elif response:
                     print(f"API error for point ({lat}, {lon}), property {prop}: {response.status_code}")
-                    prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                    prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
                     column_name = prop_names.get(prop, prop)
                     point_result[column_name] = None
                 else:
-                    prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                    prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
                     column_name = prop_names.get(prop, prop)
                     point_result[column_name] = None
                     
             except Exception as e:
                 print(f"Error processing point ({lat}, {lon}), property {prop}: {e}")
-                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content'}
+                prop_names = {'ocs': 'soil_carbon_stock', 'clay': 'clay_content', 'silt': 'silt_content', 'sand': 'sand_content', 'nitrogen': 'nitrogen_content', 'cec': 'cation_exchange_capacity', 'phh2o': 'ph_in_water', 'bdod': 'bulk_density', 'cfvo': 'coarse_fragments'}
                 column_name = prop_names.get(prop, prop)
                 point_result[column_name] = None
             
@@ -536,10 +562,10 @@ if __name__ == "__main__":
     parser.add_argument('--mode', choices=['global', 'points', 'plot'], default='points',
                        help='Download global data, extract for specific points, or plot existing data')
     parser.add_argument('--property', type=str, default='ocs',
-                       choices=['ocs', 'clay', 'silt', 'sand', 'nitrogen'], 
-                       help='Property to download (ocs=carbon, clay=clay content, silt=silt content, sand=sand content, nitrogen=nitrogen content)')
+                       choices=['ocs', 'clay', 'silt', 'sand', 'nitrogen', 'cec', 'phh2o', 'bdod', 'cfvo'], 
+                       help='Property to download (ocs=carbon, clay=clay content, silt=silt content, sand=sand content, nitrogen=nitrogen content, cec=cation exchange capacity, phh2o=pH in water, bdod=bulk density, cfvo=coarse fragments)')
     parser.add_argument('--properties', type=str, nargs='+', default=['ocs', 'clay'],
-                       choices=['ocs', 'clay', 'silt', 'sand', 'nitrogen'],
+                       choices=['ocs', 'clay', 'silt', 'sand', 'nitrogen', 'cec', 'phh2o', 'bdod', 'cfvo'],
                        help='Properties to extract for points mode')
     parser.add_argument('--depth', type=str, default='0-30cm',
                        help='Depth layer (e.g., 0-30cm, 0-5cm, 5-15cm, 15-30cm)')
@@ -559,12 +585,16 @@ if __name__ == "__main__":
                        help='CSV file to plot (uses --output path if not specified)')
     parser.add_argument('--plot-property', type=str, default='soil_carbon_stock',
                        help='Property to plot (soil_carbon_stock, clay_content, silt_content, sand_content, or nitrogen_content)')
-    
+    parser.add_argument('--resolution', type=float, default=None,
+                       help='Target resolution in degrees for global download (e.g., 0.5 for 0.5°). If not set, downloads at native 250m resolution.')
+    parser.add_argument('--all-properties', action='store_true',
+                       help='Download all soil properties (for global mode)')
+
     args = parser.parse_args()
-    
+
     if args.mode == 'points':
         # Extract data for specific points
-        extract_soil_data_for_points(args.lat_lon_file, args.output, 
+        extract_soil_data_for_points(args.lat_lon_file, args.output,
                                    args.checkpoint_file, args.batch_size,
                                    args.properties, args.depth)
     elif args.mode == 'plot':
@@ -573,4 +603,14 @@ if __name__ == "__main__":
         plot_soil_data_points(plot_file, property_name=args.plot_property)
     else:
         # Download global data
-        download_soilgrids_data(args.output_dir, args.property, args.depth)
+        if args.all_properties:
+            # Download all soil properties
+            all_props = ['ocs', 'clay', 'silt', 'sand', 'nitrogen', 'cec', 'phh2o', 'bdod', 'cfvo']
+            print(f"Downloading all {len(all_props)} soil properties...")
+            for prop in all_props:
+                print(f"\n{'='*50}")
+                download_soilgrids_data(args.output_dir, prop, args.depth, args.resolution)
+            print(f"\n{'='*50}")
+            print("All properties downloaded!")
+        else:
+            download_soilgrids_data(args.output_dir, args.property, args.depth, args.resolution)

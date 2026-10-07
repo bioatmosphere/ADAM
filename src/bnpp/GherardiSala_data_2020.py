@@ -160,7 +160,7 @@ for row_text in data_rows_text:
         csv_output_data.append(parsed_row)
 
 # Define the output CSV file name
-csv_file_name = "../productivity/globe/supplementary_table_5.csv"
+csv_file_name = "../../productivity/globe/supplementary_table_5.csv"
 
 # Write the data to a CSV file
 try:
@@ -262,6 +262,6 @@ ax.set_title(f'Sites ({GS_data_2020.shape[0]}) with BNPP Measurements', fontsize
 # Display the plot
 plt.show()
 # Save the figure
-fig.savefig('../productivity/globe/GherardiSala_2020.png', dpi=300, bbox_inches='tight')
+fig.savefig('../../productivity/globe/GherardiSala_2020.png', dpi=300, bbox_inches='tight')
 # Close the figure
 plt.close(fig)

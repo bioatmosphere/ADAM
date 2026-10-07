@@ -1,9 +1,10 @@
 """
-ForC Database BNPP Data Processing Script
+ForC Database BNPP and ANPP Data Processing Script
 
 This script downloads and processes the ForC (Forest Carbon) database from GitHub,
-extracting BNPP_root_C (Belowground Net Primary Production) data for analysis.
-It includes smart download detection to skip re-downloading existing data.
+extracting BNPP_root_C (Belowground Net Primary Production) and ANPP_2_C
+(Aboveground Net Primary Production) data for analysis. It calculates TNPP (Total NPP)
+and BNPP fraction for sites with both measurements.
 
 Data Source: https://github.com/forc-db/ForC
 Database: Global forest carbon and flux measurements
@@ -40,11 +41,12 @@ FOLDER_PATH_IN_REPO = "data"
 # Local paths
 OUTPUT_DIR = "../../productivity/forc"
 DATA_DIR = f"{OUTPUT_DIR}/data"
-PROCESSED_FILE = f"{OUTPUT_DIR}/ForC_BNPP_root_C_processed.csv"
+PROCESSED_FILE = f"{OUTPUT_DIR}/ForC_BNPP_ANPP_TNPP_processed.csv"
 FIGURES_DIR = f"{OUTPUT_DIR}/figures"
 
 # Data processing settings
-TARGET_VARIABLE = "BNPP_root_C"
+TARGET_VARIABLE_BNPP = "BNPP_root_C"
+TARGET_VARIABLE_ANPP = "ANPP_2_C"
 ENCODING = "latin-1"
 
 # =============================================================================
@@ -194,26 +196,75 @@ def load_forc_data(data_dir):
         print(f"Error loading ForC data: {e}")
         return None, None, None, None
 
-def extract_bnpp_measurements(measurements, target_variable):
+def extract_productivity_measurements(measurements, variable_name):
     """
-    Extract BNPP measurements from the ForC measurements data.
-    
+    Extract productivity measurements from the ForC measurements data.
+
     Args:
         measurements (pd.DataFrame): ForC measurements data
-        target_variable (str): Target variable name (e.g., 'BNPP_root_C')
-        
+        variable_name (str): Target variable name (e.g., 'BNPP_root_C', 'ANPP_2_C')
+
     Returns:
-        pd.DataFrame: Filtered BNPP measurements
+        pd.DataFrame: Filtered measurements
     """
-    print(f"Extracting {target_variable} measurements...")
-    
-    bnpp_measurements = measurements[measurements['variable.name'] == target_variable].copy()
-    print(f"Found {len(bnpp_measurements)} {target_variable} measurements")
-    
-    if len(bnpp_measurements) == 0:
-        print(f"Warning: No {target_variable} measurements found in the database.")
-    
-    return bnpp_measurements
+    print(f"Extracting {variable_name} measurements...")
+
+    variable_measurements = measurements[measurements['variable.name'] == variable_name].copy()
+    print(f"Found {len(variable_measurements)} {variable_name} measurements")
+
+    if len(variable_measurements) == 0:
+        print(f"Warning: No {variable_name} measurements found in the database.")
+
+    return variable_measurements
+
+def merge_bnpp_anpp_data(bnpp_data, anpp_data):
+    """
+    Merge BNPP and ANPP data for sites with both measurements.
+    Calculate TNPP and BNPP fraction.
+
+    Args:
+        bnpp_data (pd.DataFrame): Processed BNPP data
+        anpp_data (pd.DataFrame): Processed ANPP data
+
+    Returns:
+        pd.DataFrame: Merged dataset with TNPP and BNPP_fraction
+    """
+    print("Merging BNPP and ANPP data...")
+
+    # Select key columns from ANPP data to merge
+    anpp_columns = ['sites.sitename', 'mean']
+    anpp_merge = anpp_data[anpp_columns].copy()
+    anpp_merge = anpp_merge.rename(columns={'mean': 'ANPP_2_C'})
+
+    # Group by site and average (in case of multiple measurements per site)
+    anpp_merge = anpp_merge.groupby('sites.sitename', as_index=False).mean()
+
+    # Rename BNPP mean column before merge
+    bnpp_data_copy = bnpp_data.copy()
+    bnpp_data_copy = bnpp_data_copy.rename(columns={'mean': 'BNPP_root_C'})
+
+    # Merge BNPP with ANPP
+    merged_data = bnpp_data_copy.merge(
+        anpp_merge,
+        on='sites.sitename',
+        how='left'
+    )
+
+    # Calculate TNPP = BNPP + ANPP (for sites with both)
+    merged_data['TNPP_C'] = merged_data['BNPP_root_C'] + merged_data['ANPP_2_C']
+
+    # Calculate BNPP fraction = BNPP / TNPP
+    merged_data['BNPP_fraction'] = merged_data['BNPP_root_C'] / merged_data['TNPP_C']
+
+    # Count sites with both measurements
+    both_count = merged_data['TNPP_C'].notna().sum()
+    print(f"✓ Successfully merged data for {both_count} sites with both BNPP and ANPP measurements")
+    print(f"  - Mean BNPP: {merged_data['BNPP_root_C'].mean():.3f} Mg C ha-1 yr-1")
+    print(f"  - Mean ANPP: {merged_data['ANPP_2_C'].mean():.3f} Mg C ha-1 yr-1 (n={both_count})")
+    print(f"  - Mean TNPP: {merged_data['TNPP_C'].mean():.3f} Mg C ha-1 yr-1 (n={both_count})")
+    print(f"  - Mean BNPP fraction: {merged_data['BNPP_fraction'].mean():.3f} (n={both_count})")
+
+    return merged_data
 
 def merge_site_data(bnpp_measurements, sites, methodology=None):
     """
@@ -288,123 +339,147 @@ def clean_and_process_data(bnpp_data):
     
     return bnpp_clean
 
-def add_metadata_columns(bnpp_data, variables, target_variable):
+def add_metadata_columns(productivity_data, variables):
     """
-    Add standardized metadata columns to the BNPP dataset.
-    
+    Add standardized metadata columns to the productivity dataset.
+
     Args:
-        bnpp_data (pd.DataFrame): Cleaned BNPP data
+        productivity_data (pd.DataFrame): Cleaned productivity data with BNPP, ANPP, TNPP
         variables (pd.DataFrame): Variables information
-        target_variable (str): Target variable name
-        
+
     Returns:
         pd.DataFrame: Dataset with added metadata
     """
     print("Adding standardized metadata...")
-    
-    # Define comprehensive metadata columns
+
+    # Define comprehensive metadata columns (including new productivity columns)
     essential_columns = [
         # Identification
         'measurement.ID', 'sites.sitename', 'plot.name', 'citation.ID',
-        
+
         # Measurement details
-        'variable.name', 'mean', 'sd', 'se', 'n', 'original.units',
+        'variable.name', 'BNPP_root_C', 'ANPP_2_C', 'TNPP_C', 'BNPP_fraction',
+        'sd', 'se', 'n', 'original.units',
         'date', 'start.date', 'end.date',
-        
+
         # Site characteristics
         'lat', 'lon', 'country', 'continent', 'masl',
-        
+
         # Climate
         'mat', 'map',
-        
+
         # Vegetation
         'stand.age', 'dominant.life.form', 'dominant.veg', 'scientific.name',
-        
+
         # Methodology
         'method.ID', 'notes', 'area.sampled', 'depth', 'min.dbh',
-        
+
         # Quality control
         'conflicts', 'flag.suspicious', 'checked.ori.pub'
     ]
-    
+
     # Optional columns
     optional_columns = [
         'climate.notes', 'soil.texture', 'soil.classification', 'Koeppen', 'FAO.ecozone',
         'method.category', 'method.notes', 'veg.notes',
         'lower95CI', 'upper95CI', 'covariate_1', 'coV_1.value', 'covariate_2', 'coV_2.value'
     ]
-    
+
     # Select available columns
-    available_columns = [col for col in essential_columns + optional_columns if col in bnpp_data.columns]
-    bnpp_final = bnpp_data[available_columns].copy()
-    
+    available_columns = [col for col in essential_columns + optional_columns if col in productivity_data.columns]
+    productivity_final = productivity_data[available_columns].copy()
+
     # Add standardized metadata
-    bnpp_final['Data_Source'] = 'ForC_Database'
-    bnpp_final['Variable_Name'] = target_variable
-    bnpp_final['Standard_Units'] = 'Mg C ha-1 yr-1'
-    bnpp_final['Measurement_Type'] = 'Belowground_Net_Primary_Production'
-    bnpp_final['Database_Version'] = COMMIT_HASH[:7]
-    
-    # Add variable description if available
-    variable_info = variables[variables['variable.name'] == target_variable]
-    if len(variable_info) > 0:
-        var_row = variable_info.iloc[0]
-        bnpp_final['Variable_Description'] = var_row.get('description', '')
-        bnpp_final['Variable_Extended_Description'] = var_row.get('extended.description', '')
-        bnpp_final['Variable_Equations'] = var_row.get('equations', '')
-    
-    return bnpp_final
+    productivity_final['Data_Source'] = 'ForC_Database'
+    productivity_final['Standard_Units'] = 'Mg C ha-1 yr-1'
+    productivity_final['Database_Version'] = COMMIT_HASH[:7]
+
+    return productivity_final
 
 # =============================================================================
 # ANALYSIS AND REPORTING FUNCTIONS
 # =============================================================================
-def analyze_bnpp_data(bnpp_data):
+def analyze_bnpp_data(productivity_data):
     """
-    Perform comprehensive analysis of BNPP data and display results.
-    
+    Perform comprehensive analysis of productivity data and display results.
+
     Args:
-        bnpp_data (pd.DataFrame): Processed BNPP dataset
+        productivity_data (pd.DataFrame): Processed productivity dataset with BNPP, ANPP, TNPP
     """
     print(f"\n{'='*60}")
-    print("BNPP DATA ANALYSIS")
+    print("PRODUCTIVITY DATA ANALYSIS (BNPP, ANPP, TNPP)")
     print(f"{'='*60}")
-    
+
     # Basic statistics
-    print(f"\nBNPP_root_C Statistics:")
-    print(f"Total measurements: {len(bnpp_data)}")
-    if 'mean' in bnpp_data.columns:
-        print(f"Mean BNPP: {bnpp_data['mean'].mean():.3f} Mg C ha-1 yr-1")
-        print(f"Median BNPP: {bnpp_data['mean'].median():.3f} Mg C ha-1 yr-1")
-        print(f"Min BNPP: {bnpp_data['mean'].min():.3f} Mg C ha-1 yr-1")
-        print(f"Max BNPP: {bnpp_data['mean'].max():.3f} Mg C ha-1 yr-1")
-        print(f"Standard deviation: {bnpp_data['mean'].std():.3f} Mg C ha-1 yr-1")
+    print(f"\nOverall Statistics:")
+    print(f"Total measurements: {len(productivity_data)}")
+
+    if 'BNPP_root_C' in productivity_data.columns:
+        print(f"\nBNPP_root_C Statistics:")
+        bnpp_data = productivity_data['BNPP_root_C'].dropna()
+        print(f"  N: {len(bnpp_data)}")
+        print(f"  Mean: {bnpp_data.mean():.3f} Mg C ha-1 yr-1")
+        print(f"  Median: {bnpp_data.median():.3f} Mg C ha-1 yr-1")
+        print(f"  Min: {bnpp_data.min():.3f} Mg C ha-1 yr-1")
+        print(f"  Max: {bnpp_data.max():.3f} Mg C ha-1 yr-1")
+        print(f"  Std Dev: {bnpp_data.std():.3f} Mg C ha-1 yr-1")
+
+    if 'ANPP_2_C' in productivity_data.columns:
+        print(f"\nANPP_2_C Statistics:")
+        anpp_data = productivity_data['ANPP_2_C'].dropna()
+        print(f"  N: {len(anpp_data)}")
+        print(f"  Mean: {anpp_data.mean():.3f} Mg C ha-1 yr-1")
+        print(f"  Median: {anpp_data.median():.3f} Mg C ha-1 yr-1")
+        print(f"  Min: {anpp_data.min():.3f} Mg C ha-1 yr-1")
+        print(f"  Max: {anpp_data.max():.3f} Mg C ha-1 yr-1")
+        print(f"  Std Dev: {anpp_data.std():.3f} Mg C ha-1 yr-1")
+
+    if 'TNPP_C' in productivity_data.columns:
+        print(f"\nTNPP_C Statistics (BNPP + ANPP):")
+        tnpp_data = productivity_data['TNPP_C'].dropna()
+        print(f"  N: {len(tnpp_data)} (sites with both BNPP and ANPP)")
+        print(f"  Mean: {tnpp_data.mean():.3f} Mg C ha-1 yr-1")
+        print(f"  Median: {tnpp_data.median():.3f} Mg C ha-1 yr-1")
+        print(f"  Min: {tnpp_data.min():.3f} Mg C ha-1 yr-1")
+        print(f"  Max: {tnpp_data.max():.3f} Mg C ha-1 yr-1")
+        print(f"  Std Dev: {tnpp_data.std():.3f} Mg C ha-1 yr-1")
+
+    if 'BNPP_fraction' in productivity_data.columns:
+        print(f"\nBNPP Fraction (BNPP/TNPP) Statistics:")
+        frac_data = productivity_data['BNPP_fraction'].dropna()
+        print(f"  N: {len(frac_data)}")
+        print(f"  Mean: {frac_data.mean():.3f}")
+        print(f"  Median: {frac_data.median():.3f}")
+        print(f"  Min: {frac_data.min():.3f}")
+        print(f"  Max: {frac_data.max():.3f}")
+        print(f"  Std Dev: {frac_data.std():.3f}")
     
     # Geographic distribution
-    if 'continent' in bnpp_data.columns:
+    if 'continent' in productivity_data.columns:
         print(f"\nGeographic distribution:")
-        print(bnpp_data['continent'].value_counts())
-    
-    if 'country' in bnpp_data.columns:
+        print(productivity_data['continent'].value_counts())
+
+    if 'country' in productivity_data.columns:
         print(f"\nTop 10 countries:")
-        print(bnpp_data['country'].value_counts().head(10))
+        print(productivity_data['country'].value_counts().head(10))
     
     # Metadata completeness
     print(f"\nMetadata completeness:")
-    print(f"Total columns: {len(bnpp_data.columns)}")
-    
+    print(f"Total columns: {len(productivity_data.columns)}")
+
     key_metadata_fields = ['stand.age', 'dominant.life.form', 'mat', 'map', 'method.ID', 'soil.texture']
     for field in key_metadata_fields:
-        if field in bnpp_data.columns:
-            non_null_count = bnpp_data[field].notna().sum()
-            completeness = (non_null_count / len(bnpp_data)) * 100
-            print(f"  {field}: {non_null_count}/{len(bnpp_data)} ({completeness:.1f}%)")
-    
+        if field in productivity_data.columns:
+            non_null_count = productivity_data[field].notna().sum()
+            completeness = (non_null_count / len(productivity_data)) * 100
+            print(f"  {field}: {non_null_count}/{len(productivity_data)} ({completeness:.1f}%)")
+
     # Temporal coverage
-    if 'date' in bnpp_data.columns:
-        date_info = bnpp_data['date'].dropna()
+    if 'date' in productivity_data.columns:
+        date_info = productivity_data['date'].dropna()
         if len(date_info) > 0:
             print(f"\nTemporal coverage:")
-            print(f"  Date information: {len(date_info)}/{len(bnpp_data)} measurements")
+            print(f"  Date information: {len(date_info)}/{len(productivity_data)} measurements")
             try:
                 years = pd.to_numeric(date_info, errors='coerce')
                 valid_years = years.dropna()
@@ -412,168 +487,198 @@ def analyze_bnpp_data(bnpp_data):
                     print(f"  Year range: {int(valid_years.min())} - {int(valid_years.max())}")
             except:
                 print(f"  Date formats vary")
-    
+
     # Methodology coverage
-    if 'method.ID' in bnpp_data.columns:
-        method_counts = bnpp_data['method.ID'].value_counts()
+    if 'method.ID' in productivity_data.columns:
+        method_counts = productivity_data['method.ID'].value_counts()
         print(f"\nMethodology coverage:")
         print(f"  Unique methods: {len(method_counts)}")
         print(f"  Top 5 methods:")
         for method_id, count in method_counts.head().items():
             print(f"    Method {method_id}: {count} measurements")
 
-def display_sample_data(bnpp_data):
+def display_sample_data(productivity_data):
     """
     Display sample of processed data.
-    
+
     Args:
-        bnpp_data (pd.DataFrame): Processed BNPP dataset
+        productivity_data (pd.DataFrame): Processed productivity dataset
     """
     print(f"\nSample of processed data:")
-    sample_columns = ['sites.sitename', 'country', 'lat', 'lon', 'mean', 'stand.age', 'dominant.life.form']
-    available_sample_columns = [col for col in sample_columns if col in bnpp_data.columns]
-    print(bnpp_data[available_sample_columns].head())
+    sample_columns = ['sites.sitename', 'country', 'lat', 'lon', 'BNPP_root_C', 'ANPP_2_C',
+                      'TNPP_C', 'BNPP_fraction', 'stand.age', 'dominant.life.form']
+    available_sample_columns = [col for col in sample_columns if col in productivity_data.columns]
+    print(productivity_data[available_sample_columns].head(10))
 
 # =============================================================================
 # VISUALIZATION FUNCTIONS
 # =============================================================================
-def create_global_bnpp_map(bnpp_data, output_dir):
+def create_global_bnpp_map(productivity_data, output_dir):
     """
-    Create a global map showing BNPP measurement locations and values.
-    
+    Create a global map showing BNPP measurement locations and BNPP fraction.
+
     Args:
-        bnpp_data (pd.DataFrame): Processed BNPP dataset
+        productivity_data (pd.DataFrame): Processed productivity dataset
         output_dir (str): Directory to save the figure
     """
-    if 'lat' not in bnpp_data.columns or 'lon' not in bnpp_data.columns:
+    if 'lat' not in productivity_data.columns or 'lon' not in productivity_data.columns:
         print("Warning: No coordinate data available for mapping.")
         return
-    
+
     # Create figures directory
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Set up the map
     fig = plt.figure(figsize=(15, 10))
     ax = fig.add_subplot(111, projection=ccrs.PlateCarree())
-    
+
     # Add map features
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
     ax.add_feature(cfeature.BORDERS, linewidth=0.3)
     ax.add_feature(cfeature.LAND, color='lightgray', alpha=0.5)
     ax.add_feature(cfeature.OCEAN, color='lightblue', alpha=0.3)
-    
-    # Plot BNPP measurements
-    if 'mean' in bnpp_data.columns:
-        # Use color scale for BNPP values
-        scatter = ax.scatter(bnpp_data['lon'], bnpp_data['lat'], 
-                           c=bnpp_data['mean'], 
-                           cmap='viridis', 
-                           s=30, 
+
+    # Plot BNPP measurements colored by BNPP fraction
+    if 'BNPP_fraction' in productivity_data.columns:
+        # Use color scale for BNPP fraction values
+        plot_data = productivity_data.dropna(subset=['BNPP_fraction'])
+        scatter = ax.scatter(plot_data['lon'], plot_data['lat'],
+                           c=plot_data['BNPP_fraction'],
+                           cmap='RdYlGn_r',
+                           s=50,
+                           alpha=0.7,
+                           edgecolors='black',
+                           linewidth=0.5,
+                           vmin=0, vmax=1,
+                           transform=ccrs.PlateCarree())
+
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax, shrink=0.6, pad=0.02)
+        cbar.set_label('BNPP Fraction (BNPP/TNPP)', fontsize=12)
+
+    elif 'BNPP_root_C' in productivity_data.columns:
+        # Fallback to BNPP values
+        plot_data = productivity_data.dropna(subset=['BNPP_root_C'])
+        scatter = ax.scatter(plot_data['lon'], plot_data['lat'],
+                           c=plot_data['BNPP_root_C'],
+                           cmap='viridis',
+                           s=50,
                            alpha=0.7,
                            edgecolors='black',
                            linewidth=0.5,
                            transform=ccrs.PlateCarree())
-        
+
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax, shrink=0.6, pad=0.02)
         cbar.set_label('BNPP (Mg C ha⁻¹ yr⁻¹)', fontsize=12)
     else:
         # Simple point plot if no values available
-        ax.scatter(bnpp_data['lon'], bnpp_data['lat'], 
+        ax.scatter(productivity_data['lon'], productivity_data['lat'],
                   c='red', s=20, alpha=0.7,
                   transform=ccrs.PlateCarree())
-    
+
     # Set global extent
     ax.set_global()
     ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False)
-    
+
     # Title and labels
-    plt.title(f'Global Distribution of ForC BNPP Measurements\n({len(bnpp_data)} forest sites)', 
+    tnpp_sites = productivity_data['TNPP_C'].notna().sum()
+    plt.title(f'Global Distribution of ForC Productivity Measurements\n'
+              f'({len(productivity_data)} BNPP sites, {tnpp_sites} with TNPP)',
               fontsize=16, fontweight='bold')
-    
+
     # Save the figure
-    output_file = os.path.join(output_dir, 'ForC_BNPP_global_map.png')
+    output_file = os.path.join(output_dir, 'ForC_BNPP_ANPP_global_map.png')
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"✓ Global map saved to: {output_file}")
     plt.close()
 
-def create_bnpp_distribution_plots(bnpp_data, output_dir):
+def create_bnpp_distribution_plots(productivity_data, output_dir):
     """
-    Create statistical distribution plots for BNPP data.
-    
+    Create statistical distribution plots for productivity data.
+
     Args:
-        bnpp_data (pd.DataFrame): Processed BNPP dataset
+        productivity_data (pd.DataFrame): Processed productivity dataset
         output_dir (str): Directory to save the figures
     """
-    if 'mean' not in bnpp_data.columns:
-        print("Warning: No BNPP values available for distribution plots.")
-        return
-    
     # Create figures directory
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Set up subplot layout
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle('ForC BNPP Data Distribution Analysis', fontsize=16, fontweight='bold')
-    
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('ForC Productivity Data Distribution Analysis', fontsize=16, fontweight='bold')
+
     # 1. Histogram of BNPP values
     ax1 = axes[0, 0]
-    ax1.hist(bnpp_data['mean'], bins=30, alpha=0.7, color='skyblue', edgecolor='black')
-    ax1.set_xlabel('BNPP (Mg C ha⁻¹ yr⁻¹)')
-    ax1.set_ylabel('Frequency')
-    ax1.set_title('Distribution of BNPP Values')
-    ax1.grid(True, alpha=0.3)
-    
-    # 2. Box plot by continent
+    if 'BNPP_root_C' in productivity_data.columns:
+        bnpp_data = productivity_data['BNPP_root_C'].dropna()
+        ax1.hist(bnpp_data, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+        ax1.set_xlabel('BNPP (Mg C ha⁻¹ yr⁻¹)')
+        ax1.set_ylabel('Frequency')
+        ax1.set_title(f'BNPP Distribution (n={len(bnpp_data)})')
+        ax1.grid(True, alpha=0.3)
+
+    # 2. Histogram of ANPP values
     ax2 = axes[0, 1]
-    if 'continent' in bnpp_data.columns:
-        continent_data = bnpp_data.dropna(subset=['continent'])
-        if len(continent_data) > 0:
-            sns.boxplot(data=continent_data, x='continent', y='mean', ax=ax2)
-            ax2.set_xlabel('Continent')
-            ax2.set_ylabel('BNPP (Mg C ha⁻¹ yr⁻¹)')
-            ax2.set_title('BNPP by Continent')
-            ax2.tick_params(axis='x', rotation=45)
-        else:
-            ax2.text(0.5, 0.5, 'No continent data available', 
-                    transform=ax2.transAxes, ha='center', va='center')
-    else:
-        ax2.text(0.5, 0.5, 'No continent data available', 
-                transform=ax2.transAxes, ha='center', va='center')
-    
-    # 3. Scatter plot: BNPP vs latitude
-    ax3 = axes[1, 0]
-    if 'lat' in bnpp_data.columns:
-        ax3.scatter(bnpp_data['lat'], bnpp_data['mean'], alpha=0.6, color='forestgreen')
-        ax3.set_xlabel('Latitude (°)')
-        ax3.set_ylabel('BNPP (Mg C ha⁻¹ yr⁻¹)')
-        ax3.set_title('BNPP vs Latitude')
+    if 'ANPP_2_C' in productivity_data.columns:
+        anpp_data = productivity_data['ANPP_2_C'].dropna()
+        ax2.hist(anpp_data, bins=30, alpha=0.7, color='lightcoral', edgecolor='black')
+        ax2.set_xlabel('ANPP (Mg C ha⁻¹ yr⁻¹)')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title(f'ANPP Distribution (n={len(anpp_data)})')
+        ax2.grid(True, alpha=0.3)
+
+    # 3. Histogram of TNPP values
+    ax3 = axes[0, 2]
+    if 'TNPP_C' in productivity_data.columns:
+        tnpp_data = productivity_data['TNPP_C'].dropna()
+        ax3.hist(tnpp_data, bins=30, alpha=0.7, color='lightgreen', edgecolor='black')
+        ax3.set_xlabel('TNPP (Mg C ha⁻¹ yr⁻¹)')
+        ax3.set_ylabel('Frequency')
+        ax3.set_title(f'TNPP Distribution (n={len(tnpp_data)})')
         ax3.grid(True, alpha=0.3)
-    else:
-        ax3.text(0.5, 0.5, 'No latitude data available', 
-                transform=ax3.transAxes, ha='center', va='center')
-    
-    # 4. Climate relationship (if available)
-    ax4 = axes[1, 1]
-    if 'mat' in bnpp_data.columns:
-        climate_data = bnpp_data.dropna(subset=['mat'])
-        if len(climate_data) > 0:
-            ax4.scatter(climate_data['mat'], climate_data['mean'], alpha=0.6, color='orange')
-            ax4.set_xlabel('Mean Annual Temperature (°C)')
-            ax4.set_ylabel('BNPP (Mg C ha⁻¹ yr⁻¹)')
-            ax4.set_title('BNPP vs Mean Annual Temperature')
-            ax4.grid(True, alpha=0.3)
-        else:
-            ax4.text(0.5, 0.5, 'No climate data available', 
-                    transform=ax4.transAxes, ha='center', va='center')
-    else:
-        ax4.text(0.5, 0.5, 'No climate data available', 
-                transform=ax4.transAxes, ha='center', va='center')
-    
+
+    # 4. BNPP fraction histogram
+    ax4 = axes[1, 0]
+    if 'BNPP_fraction' in productivity_data.columns:
+        frac_data = productivity_data['BNPP_fraction'].dropna()
+        ax4.hist(frac_data, bins=30, alpha=0.7, color='gold', edgecolor='black')
+        ax4.set_xlabel('BNPP Fraction (BNPP/TNPP)')
+        ax4.set_ylabel('Frequency')
+        ax4.set_title(f'BNPP Fraction Distribution (n={len(frac_data)})')
+        ax4.axvline(frac_data.mean(), color='red', linestyle='--', label=f'Mean: {frac_data.mean():.3f}')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+    # 5. BNPP vs ANPP scatter
+    ax5 = axes[1, 1]
+    if 'BNPP_root_C' in productivity_data.columns and 'ANPP_2_C' in productivity_data.columns:
+        plot_data = productivity_data.dropna(subset=['BNPP_root_C', 'ANPP_2_C'])
+        ax5.scatter(plot_data['ANPP_2_C'], plot_data['BNPP_root_C'], alpha=0.6, color='purple')
+        ax5.set_xlabel('ANPP (Mg C ha⁻¹ yr⁻¹)')
+        ax5.set_ylabel('BNPP (Mg C ha⁻¹ yr⁻¹)')
+        ax5.set_title(f'BNPP vs ANPP (n={len(plot_data)})')
+        # Add 1:1 line
+        max_val = max(plot_data['ANPP_2_C'].max(), plot_data['BNPP_root_C'].max())
+        ax5.plot([0, max_val], [0, max_val], 'r--', alpha=0.5, label='1:1 line')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+
+    # 6. TNPP by continent
+    ax6 = axes[1, 2]
+    if 'TNPP_C' in productivity_data.columns and 'continent' in productivity_data.columns:
+        plot_data = productivity_data.dropna(subset=['TNPP_C', 'continent'])
+        if len(plot_data) > 0:
+            sns.boxplot(data=plot_data, x='continent', y='TNPP_C', ax=ax6)
+            ax6.set_xlabel('Continent')
+            ax6.set_ylabel('TNPP (Mg C ha⁻¹ yr⁻¹)')
+            ax6.set_title('TNPP by Continent')
+            ax6.tick_params(axis='x', rotation=45)
+
     plt.tight_layout()
-    
+
     # Save the figure
-    output_file = os.path.join(output_dir, 'ForC_BNPP_distributions.png')
+    output_file = os.path.join(output_dir, 'ForC_productivity_distributions.png')
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"✓ Distribution plots saved to: {output_file}")
     plt.close()
@@ -725,60 +830,77 @@ def create_all_visualizations(bnpp_data):
 # =============================================================================
 def process_bnpp_data(data_dir):
     """
-    Main function to process BNPP_root_C data from ForC database.
-    
+    Main function to process BNPP_root_C and ANPP_2_C data from ForC database.
+    Calculates TNPP and BNPP fraction.
+
     Args:
         data_dir (str): Path to the ForC data directory
     """
     try:
         print("\n" + "="*60)
-        print("PROCESSING FORC BNPP DATA")
+        print("PROCESSING FORC PRODUCTIVITY DATA (BNPP, ANPP, TNPP)")
         print("="*60)
-        
+
         # Load ForC data
         measurements, sites, variables, methodology = load_forc_data(data_dir)
         if measurements is None:
             return False
-        
+
         # Extract BNPP measurements
-        bnpp_measurements = extract_bnpp_measurements(measurements, TARGET_VARIABLE)
+        bnpp_measurements = extract_productivity_measurements(measurements, TARGET_VARIABLE_BNPP)
         if len(bnpp_measurements) == 0:
             return False
-        
-        # Merge with site and methodology data
+
+        # Merge BNPP with site and methodology data
         bnpp_data = merge_site_data(bnpp_measurements, sites, methodology)
-        
-        # Clean and process data
+
+        # Clean BNPP data
         bnpp_clean = clean_and_process_data(bnpp_data)
-        
+
+        # Extract ANPP measurements
+        anpp_measurements = extract_productivity_measurements(measurements, TARGET_VARIABLE_ANPP)
+
+        # Merge ANPP with site data (simpler, just need coordinates and site info)
+        anpp_data = merge_site_data(anpp_measurements, sites, methodology)
+
+        # Clean ANPP data
+        anpp_clean = clean_and_process_data(anpp_data)
+
+        # Merge BNPP and ANPP data, calculate TNPP and BNPP_fraction
+        productivity_merged = merge_bnpp_anpp_data(bnpp_clean, anpp_clean)
+
         # Add metadata columns
-        bnpp_final = add_metadata_columns(bnpp_clean, variables, TARGET_VARIABLE)
-        
+        productivity_final = add_metadata_columns(productivity_merged, variables)
+
         # Save processed data
         os.makedirs(os.path.dirname(PROCESSED_FILE), exist_ok=True)
-        bnpp_final.to_csv(PROCESSED_FILE, index=False)
-        print(f"\nProcessed BNPP data saved to: {PROCESSED_FILE}")
-        
+        productivity_final.to_csv(PROCESSED_FILE, index=False)
+        print(f"\nProcessed productivity data saved to: {PROCESSED_FILE}")
+
         # Display analysis and sample data
-        analyze_bnpp_data(bnpp_final)
-        display_sample_data(bnpp_final)
-        
+        analyze_bnpp_data(productivity_final)
+        display_sample_data(productivity_final)
+
         # Create visualizations
-        create_all_visualizations(bnpp_final)
-        
+        create_all_visualizations(productivity_final)
+
         # Success summary
         print(f"\n{'='*60}")
-        print("FORC BNPP PROCESSING COMPLETE")
+        print("FORC PRODUCTIVITY PROCESSING COMPLETE")
         print(f"{'='*60}")
-        print(f"✓ Comprehensive metadata extraction completed")
-        print(f"✓ {len(bnpp_final)} BNPP measurements with {len(bnpp_final.columns)} metadata fields")
+        print(f"✓ Comprehensive productivity data extraction completed")
+        print(f"✓ {len(productivity_final)} BNPP measurements")
+        print(f"✓ {productivity_final['TNPP_C'].notna().sum()} sites with both BNPP and ANPP (TNPP calculated)")
+        print(f"✓ {len(productivity_final.columns)} metadata fields")
         print(f"✓ Data saved to: {os.path.basename(PROCESSED_FILE)}")
         print(f"✓ Visualizations saved to: {FIGURES_DIR}")
-        
+
         return True
-        
+
     except Exception as e:
-        print(f"Error processing BNPP data: {e}")
+        print(f"Error processing productivity data: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # =============================================================================
@@ -787,49 +909,49 @@ def process_bnpp_data(data_dir):
 def main():
     """Main execution function."""
     print("="*60)
-    print("FORC DATABASE BNPP EXTRACTION")
+    print("FORC DATABASE PRODUCTIVITY EXTRACTION (BNPP + ANPP + TNPP)")
     print("="*60)
-    print(f"Target variable: {TARGET_VARIABLE}")
+    print(f"Target variables: {TARGET_VARIABLE_BNPP}, {TARGET_VARIABLE_ANPP}")
     print(f"Output directory: {OUTPUT_DIR}")
     print("-" * 60)
-    
+
     # Check if data already exists
     data_already_exists = check_data_exists(DATA_DIR)
-    
+
     if data_already_exists:
         print("✓ ForC data already exists and appears complete.")
         print(f"✓ Data location: {os.path.abspath(DATA_DIR)}")
-        print("✓ Skipping download, proceeding to BNPP processing...")
+        print("✓ Skipping download, proceeding to productivity processing...")
         print("-" * 60)
-        
-        # Process BNPP data directly
+
+        # Process productivity data directly
         success = process_bnpp_data(DATA_DIR)
-        
+
     else:
         print("ForC data not found or incomplete. Starting download...")
         print(f"Repository: {USER}/{REPO}")
         print(f"Commit: {COMMIT_HASH}")
         print("-" * 60)
-        
+
         # Download ForC data
         download_success = download_file_from_github(
             USER, REPO, COMMIT_HASH, FOLDER_PATH_IN_REPO, DATA_DIR
         )
-        
+
         if download_success:
-            # Process BNPP data after successful download
+            # Process productivity data after successful download
             success = process_bnpp_data(DATA_DIR)
         else:
             print("Failed to download ForC data. Exiting.")
             success = False
-    
+
     # Final status
     if success:
-        print(f"\n🎉 ForC BNPP extraction completed successfully!")
+        print(f"\n🎉 ForC productivity extraction completed successfully!")
         print(f"📁 Processed data: {PROCESSED_FILE}")
     else:
-        print(f"\n❌ ForC BNPP extraction failed.")
-    
+        print(f"\n❌ ForC productivity extraction failed.")
+
     return success
 
 if __name__ == "__main__":

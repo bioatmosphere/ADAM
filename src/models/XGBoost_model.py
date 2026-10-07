@@ -1,8 +1,8 @@
 """
 A Belowground Productivity (BP) XGBoost model for the ELM-TAM benchmark pipeline.
 
-This module provides XGBoost regression functionality for predicting belowground 
-net primary productivity (BNPP) using environmental predictors from the TAM framework.
+This module provides XGBoost regression functionality for predicting belowground
+net primary productivity fraction (BNPP/TNPP) using environmental predictors.
 
 Key functions:
 - train_xgboost: Train XGBoost model on integrated dataset
@@ -11,16 +11,19 @@ Key functions:
 
 Data sources integrated:
 - ForC global forest carbon database
-- GherardiSala grassland productivity data  
+- Global grassland productivity database
 - TerraClimate environmental variables (aet, pet, ppt, tmax, tmin, vpd)
-- GLASS satellite data (yearly GPP)
 - SoilGrids soil properties
+- Elevation and soil moisture data
 
 Model outputs:
 - Trained model file (xgb_model.pkl)
 - Feature importance plot (xgb_feature_importance.png)
 - Predictions scatter plot (xgb_predictions_plot.png)
 - Model summary text file (xgb_model_summary.txt)
+
+Target variable: BNPP_fraction (BNPP/TNPP ratio, 0-1 scale)
+Total samples: 5,837 measurements from global ecosystems
 
 Author: TAM Development Team
 """
@@ -42,7 +45,7 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 warnings.filterwarnings('ignore')
 
 
-def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_data.csv") -> pd.DataFrame:
+def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_data_cleaned.csv") -> pd.DataFrame:
     """
     Load the integrated dataset from the data aggregation pipeline.
     
@@ -59,10 +62,16 @@ def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_d
     data_path = Path(data_path)
     
     if not data_path.exists():
-        raise FileNotFoundError(
-            f"Integrated dataset not found at {data_path}. "
-            "Please run the data aggregation pipeline first."
-        )
+        # Try fallback to original uncleaned data
+        fallback_path = Path("../../productivity/earth/aggregated_data.csv")
+        if fallback_path.exists():
+            print(f"Cleaned data not found, using original data from: {fallback_path}")
+            data_path = fallback_path
+        else:
+            raise FileNotFoundError(
+                f"Integrated dataset not found at {data_path}. "
+                "Please run the data aggregation pipeline first."
+            )
     
     print(f"Loading integrated data from: {data_path}")
     df = pd.read_csv(data_path)
@@ -84,43 +93,109 @@ def load_integrated_data(data_path: str = "../../productivity/earth/aggregated_d
     return df
 
 
-def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP') -> Tuple[pd.DataFrame, pd.Series]:
+def prepare_features_target(df: pd.DataFrame, target_col: str = 'BNPP_fraction') -> Tuple[pd.DataFrame, pd.Series]:
     """
     Prepare feature matrix and target vector for machine learning.
-    
+
     Args:
         df: Integrated dataset
         target_col: Name of target variable column
-        
+
     Returns:
         Tuple of (features DataFrame, target Series)
     """
-    # Remove non-predictive columns (including lat/lon to avoid spatial overfitting)
-    exclude_cols = [target_col, 'site_id', 'study_id', 'measurement_id', 'lat', 'lon'] 
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
-    
+    # Use only environmental features (exclude BNPP, TNPP, ANPP to avoid data leakage)
+    # These 17 features match what was used in Random Forest and TabPFN models
+    feature_cols = [
+        'aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation'
+    ]
+
     # Handle missing values
     X = df[feature_cols].copy()
     y = df[target_col].copy()
-    
+
     # Remove rows with missing target values
     valid_idx = ~y.isna()
     X = X[valid_idx]
     y = y[valid_idx]
-    
-    # Remove categorical variables (keep only numeric features)
-    categorical_cols = X.select_dtypes(include=['object']).columns
-    if len(categorical_cols) > 0:
-        print(f"Excluding categorical variables: {list(categorical_cols)}")
-        X = X.select_dtypes(exclude=['object'])
-    
+
+    print(f"Using {len(feature_cols)} environmental features (excluding BNPP/TNPP/ANPP to prevent data leakage)")
+    print(f"Features: {feature_cols}")
+
     # Fill missing features with median values
     X = X.fillna(X.median())
-    
+
     print(f"Features prepared: {X.shape[1]} variables, {X.shape[0]} samples")
-    print(f"Feature columns: {list(X.columns)}")
-    
+    print(f"Target variable ({target_col}) range: {y.min():.2f} to {y.max():.2f}")
+
     return X, y
+
+
+def plot_data_distribution(df: pd.DataFrame, save_path: str = "xgboost_bnpp_fraction/xgb_data_distribution.png"):
+    """Plot distribution of BNPP_fraction data by ecosystem type and data source."""
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle('BNPP Fraction Data Distribution Analysis - XGBoost', fontsize=16, fontweight='bold')
+
+    # 1. Histogram of BNPP_fraction values
+    ax1 = axes[0, 0]
+    ax1.hist(df['BNPP_fraction'], bins=30, alpha=0.7, color='lightcoral', edgecolor='black')
+    ax1.set_xlabel('BNPP Fraction (BNPP/TNPP)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Distribution of BNPP Fraction Values')
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Box plot by data source if available
+    ax2 = axes[0, 1]
+    if 'data_source' in df.columns:
+        data_sources = df['data_source'].dropna().unique()
+        if len(data_sources) > 1:
+            import seaborn as sns
+            sns.boxplot(data=df, x='data_source', y='BNPP_fraction', ax=ax2)
+            ax2.set_xlabel('Data Source')
+            ax2.set_ylabel('BNPP Fraction')
+            ax2.set_title('BNPP Fraction by Data Source')
+        else:
+            ax2.text(0.5, 0.5, 'Single data source', ha='center', va='center', transform=ax2.transAxes)
+    else:
+        ax2.text(0.5, 0.5, 'No data source info', ha='center', va='center', transform=ax2.transAxes)
+
+    # 3. Scatter plot: BNPP_fraction vs climate variable
+    ax3 = axes[1, 0]
+    if 'vpd' in df.columns:
+        ax3.scatter(df['vpd'], df['BNPP_fraction'], alpha=0.6, color='purple')
+        ax3.set_xlabel('Vapor Pressure Deficit (kPa)')
+        ax3.set_ylabel('BNPP Fraction')
+        ax3.set_title('BNPP Fraction vs Vapor Pressure Deficit')
+        ax3.grid(True, alpha=0.3)
+    else:
+        ax3.text(0.5, 0.5, 'No VPD data', ha='center', va='center', transform=ax3.transAxes)
+
+    # 4. Scatter plot: BNPP_fraction vs elevation
+    ax4 = axes[1, 1]
+    if 'elevation' in df.columns:
+        elev_data = df[df['elevation'].notna()]
+        if len(elev_data) > 0:
+            ax4.scatter(elev_data['elevation'], elev_data['BNPP_fraction'], alpha=0.6, color='darkorange')
+            ax4.set_xlabel('Elevation (m)')
+            ax4.set_ylabel('BNPP Fraction')
+            ax4.set_title('BNPP Fraction vs Elevation')
+            ax4.grid(True, alpha=0.3)
+        else:
+            ax4.text(0.5, 0.5, 'No elevation data', ha='center', va='center', transform=ax4.transAxes)
+    else:
+        ax4.text(0.5, 0.5, 'No elevation data', ha='center', va='center', transform=ax4.transAxes)
+    
+    plt.tight_layout()
+    
+    # Save the plot
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"XGBoost data distribution plot saved to: {save_path}")
+    plt.close()
 
 
 def train_xgboost(
@@ -159,10 +234,10 @@ def train_xgboost(
         # Define parameter grid
         param_grid = {
             'n_estimators': [100, 200, 300],
-            'max_depth': [3, 6, 9],
-            'learning_rate': [0.01, 0.1, 0.2],
-            'subsample': [0.8, 0.9, 1.0],
-            'colsample_bytree': [0.8, 0.9, 1.0]
+            'max_depth': [3, 5, 7],
+            'learning_rate': [0.01, 0.1, 0.3],
+            'subsample': [0.8, 1.0],
+            'colsample_bytree': [0.8, 1.0]
         }
         
         # Grid search with cross-validation
@@ -259,7 +334,7 @@ def evaluate_model(
     return metrics
 
 
-def plot_feature_importance(model: xgb.XGBRegressor, feature_names: list, top_n: int = 15, save_path: str = "../models/xgb_feature_importance.png"):
+def plot_feature_importance(model: xgb.XGBRegressor, feature_names: list, top_n: int = 15, save_path: str = "xgboost_bnpp_fraction/xgb_feature_importance.png"):
     """Plot feature importances from trained XGBoost model."""
     importances = model.feature_importances_
     feature_importance_df = pd.DataFrame({
@@ -290,19 +365,19 @@ def plot_feature_importance(model: xgb.XGBRegressor, feature_names: list, top_n:
         print(f"{row['feature']}: {row['importance']:.4f}")
 
 
-def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "../models/xgb_predictions_plot.png"):
+def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path: str = "xgboost_bnpp_fraction/xgb_predictions_plot.png"):
     """Plot actual vs predicted values with perfect prediction line."""
     plt.figure(figsize=(10, 8))
     plt.scatter(y_true, y_pred, alpha=0.6, s=50, color='blue', edgecolors='black', linewidth=0.5)
-    
+
     # Perfect prediction line
     min_val = min(y_true.min(), y_pred.min())
     max_val = max(y_true.max(), y_pred.max())
     plt.plot([min_val, max_val], [min_val, max_val], '--r', linewidth=2, label='Perfect Prediction')
-    
-    plt.xlabel('Actual BNPP (gC m⁻² year⁻¹)')
-    plt.ylabel('Predicted BNPP (gC m⁻² year⁻¹)')
-    plt.title(f'Actual vs Predicted BNPP - XGBoost Model (R² = {r2:.4f})')
+
+    plt.xlabel('Actual BNPP Fraction')
+    plt.ylabel('Predicted BNPP Fraction')
+    plt.title(f'Actual vs Predicted BNPP Fraction - XGBoost Model (R² = {r2:.4f})')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -315,7 +390,7 @@ def plot_predictions(y_true: pd.Series, y_pred: np.ndarray, r2: float, save_path
     plt.close()
 
 
-def save_model(model: xgb.XGBRegressor, metrics: Dict, output_path: str = "../models/xgb_model.pkl"):
+def save_model(model: xgb.XGBRegressor, metrics: Dict, output_path: str = "xgboost_bnpp_fraction/xgb_model.pkl"):
     """Save trained model and metrics to disk."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -368,19 +443,32 @@ def main():
     Loads data, trains model, and evaluates performance.
     """
     try:
+        print("="*60)
+        print("XGBOOST MODEL TRAINING")
+        print("="*60)
+        
         # Load integrated data
         df = load_integrated_data()
+        
+        # Plot data distribution
+        plot_data_distribution(df)
         
         # Prepare features and target
         X, y = prepare_features_target(df)
         
         # Train model
-        model, metrics = train_xgboost(X, y, tune_hyperparameters=False)
+        model, metrics = train_xgboost(X, y, tune_hyperparameters=True)
         
         # Save model
         save_model(model, metrics)
         
-        print("\nXGBoost training completed successfully!")
+        print(f"\n{'='*60}")
+        print("XGBOOST TRAINING COMPLETED")
+        print(f"{'='*60}")
+        print(f"✓ Model trained on {len(df)} samples with {X.shape[1]} features")
+        print(f"✓ Test R²: {metrics['test_r2']:.4f}")
+        print(f"✓ Test RMSE: {metrics['test_rmse']:.4f}")
+        print(f"✓ Outputs saved to: xgboost_bnpp_fraction/ directory")
         
     except Exception as e:
         print(f"Error in XGBoost model training: {e}")

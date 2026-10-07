@@ -1,12 +1,18 @@
 """
-Grassland BNPP Data Processing Script
+Grassland Productivity Data Processing Script
 
-This script downloads and processes global grassland Below-ground Net Primary 
-Productivity (BNPP) data from the Dryad repository. It handles data cleaning,
-coordinate range processing, and creates comprehensive visualizations.
+This script downloads and processes global grassland productivity data from the
+Dryad repository, including:
+- BNPP (Below-ground Net Primary Productivity)
+- ANPP (Above-ground Net Primary Productivity)
+- TNPP (Total Net Primary Productivity)
+- BNPP fraction (BNPP/TNPP ratio)
+
+The script handles data cleaning, coordinate range processing, and creates
+comprehensive visualizations.
 
 Data Source: https://datadryad.org/dataset/doi:10.5061/dryad.7sqv9s4vv
-Reference: Sun et al. (2022) - Above‐ and belowground net‐primary productivity: 
+Reference: Sun et al. (2022) - Above‐ and belowground net‐primary productivity:
 A field‐based global database of grasslands
 
 Author: ADAM Project
@@ -226,30 +232,34 @@ def clean_numeric_columns(df):
 
 def extract_bnpp_data(df):
     """
-    Extract and process BNPP data with metadata.
-    
+    Extract and process BNPP data with metadata, including ANPP, TNPP, and BNPP fraction.
+
     Args:
         df (pd.DataFrame): Input dataframe
-        
+
     Returns:
-        pd.DataFrame: Processed BNPP dataset
+        pd.DataFrame: Processed BNPP dataset with productivity variables
     """
-    # Select relevant columns
-    bnpp_columns = ['Entry_ID', 'Site_ID', 'Location', 'Country', 'Continent', 
-                   'Latitude', 'Longitude', 'Altitude', 'Sampling year', 
-                   'Grassland type', 'Dominant Species', 'BNPP', 'BNPP_SE', 
+    # Select relevant columns including ANPP and TNPP
+    bnpp_columns = ['Entry_ID', 'Site_ID', 'Location', 'Country', 'Continent',
+                   'Latitude', 'Longitude', 'Altitude', 'Sampling year',
+                   'Grassland type', 'Dominant Species',
+                   'BNPP', 'BNPP_SE', 'ANPP', 'ANPP_SE', 'TNPP',
                    'MAT', 'MAP', 'Sources']
-    
+
     bnpp_data = df[bnpp_columns].copy()
-    
+
     # Remove rows with missing BNPP data
     bnpp_data = bnpp_data.dropna(subset=['BNPP'])
-    
+
+    # Calculate BNPP fraction (BNPP/TNPP)
+    bnpp_data['BNPP_fraction'] = bnpp_data['BNPP'] / bnpp_data['TNPP']
+
     # Add metadata columns
     bnpp_data['Data_Source'] = 'Grassland_Global_Database'
     bnpp_data['Measurement_Type'] = 'BNPP'
     bnpp_data['Units'] = 'g/m²/year'
-    
+
     return bnpp_data
 
 # =============================================================================
@@ -257,20 +267,22 @@ def extract_bnpp_data(df):
 # =============================================================================
 def analyze_bnpp_data(df, bnpp_data):
     """
-    Perform comprehensive analysis of BNPP data.
-    
+    Perform comprehensive analysis of BNPP data including ANPP, TNPP, and BNPP fraction.
+
     Args:
         df (pd.DataFrame): Full dataset
         bnpp_data (pd.DataFrame): BNPP-specific dataset
     """
     print(f"\\nDataset shape: {df.shape}")
     print(f"Columns: {list(df.columns)}")
-    
-    print(f"\\nBNPP data availability:")
+
+    print(f"\\nData availability:")
     print(f"Total rows: {len(df)}")
     print(f"Rows with BNPP data: {df['BNPP'].notna().sum()}")
-    print(f"Rows missing BNPP data: {df['BNPP'].isna().sum()}")
-    
+    print(f"Rows with ANPP data: {df['ANPP'].notna().sum()}")
+    print(f"Rows with TNPP data: {df['TNPP'].notna().sum()}")
+
+    # BNPP statistics
     if df['BNPP'].notna().any():
         print(f"\\nBNPP statistics (g/m²/year):")
         print(f"Mean: {df['BNPP'].mean():.2f}")
@@ -278,11 +290,38 @@ def analyze_bnpp_data(df, bnpp_data):
         print(f"Min: {df['BNPP'].min():.2f}")
         print(f"Max: {df['BNPP'].max():.2f}")
         print(f"Standard deviation: {df['BNPP'].std():.2f}")
-    
-    print(f"\\nSample of processed BNPP data:")
-    print(bnpp_data.head())
-    
-    print(f"\\nGeographic distribution of BNPP data:")
+
+    # ANPP statistics
+    if df['ANPP'].notna().any():
+        print(f"\\nANPP statistics (g/m²/year):")
+        print(f"Mean: {df['ANPP'].mean():.2f}")
+        print(f"Median: {df['ANPP'].median():.2f}")
+        print(f"Min: {df['ANPP'].min():.2f}")
+        print(f"Max: {df['ANPP'].max():.2f}")
+        print(f"Standard deviation: {df['ANPP'].std():.2f}")
+
+    # TNPP statistics
+    if df['TNPP'].notna().any():
+        print(f"\\nTNPP statistics (g/m²/year):")
+        print(f"Mean: {df['TNPP'].mean():.2f}")
+        print(f"Median: {df['TNPP'].median():.2f}")
+        print(f"Min: {df['TNPP'].min():.2f}")
+        print(f"Max: {df['TNPP'].max():.2f}")
+        print(f"Standard deviation: {df['TNPP'].std():.2f}")
+
+    # BNPP fraction statistics
+    if 'BNPP_fraction' in bnpp_data.columns and bnpp_data['BNPP_fraction'].notna().any():
+        print(f"\\nBNPP fraction (BNPP/TNPP) statistics:")
+        print(f"Mean: {bnpp_data['BNPP_fraction'].mean():.3f}")
+        print(f"Median: {bnpp_data['BNPP_fraction'].median():.3f}")
+        print(f"Min: {bnpp_data['BNPP_fraction'].min():.3f}")
+        print(f"Max: {bnpp_data['BNPP_fraction'].max():.3f}")
+        print(f"Standard deviation: {bnpp_data['BNPP_fraction'].std():.3f}")
+
+    print(f"\\nSample of processed data:")
+    print(bnpp_data[['Location', 'BNPP', 'ANPP', 'TNPP', 'BNPP_fraction']].head())
+
+    print(f"\\nGeographic distribution:")
     print(bnpp_data['Continent'].value_counts())
     print(f"\\nCountry distribution:")
     print(bnpp_data['Country'].value_counts().head(10))
@@ -419,8 +458,94 @@ def create_continental_comparison(bnpp_data):
     cont_file = f"{OUTPUT_DIR}/grassland_bnpp_by_continent.png"
     plt.savefig(cont_file, dpi=300, bbox_inches='tight')
     print(f"Continental comparison plot saved to: {cont_file}")
-    
+
     return cont_file
+
+def create_productivity_comparison(bnpp_data):
+    """
+    Create comprehensive comparison plots for BNPP, ANPP, TNPP, and BNPP fraction.
+
+    Args:
+        bnpp_data (pd.DataFrame): BNPP dataset with all productivity variables
+
+    Returns:
+        str: Path to saved plot
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+    # Filter data with valid productivity values
+    valid_data = bnpp_data.dropna(subset=['BNPP', 'ANPP', 'TNPP', 'BNPP_fraction'])
+
+    # Plot 1: BNPP vs ANPP scatter
+    ax1 = axes[0, 0]
+    scatter1 = ax1.scatter(valid_data['ANPP'], valid_data['BNPP'],
+                          c=valid_data['BNPP_fraction'], cmap='viridis',
+                          alpha=0.6, edgecolors='black', linewidth=0.5)
+    ax1.set_xlabel('ANPP (g/m²/year)', fontsize=11)
+    ax1.set_ylabel('BNPP (g/m²/year)', fontsize=11)
+    ax1.set_title('BNPP vs ANPP (colored by BNPP fraction)', fontsize=12, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+    cbar1 = plt.colorbar(scatter1, ax=ax1)
+    cbar1.set_label('BNPP fraction', fontsize=10)
+
+    # Add 1:1 line
+    max_val = max(valid_data['ANPP'].max(), valid_data['BNPP'].max())
+    ax1.plot([0, max_val], [0, max_val], 'r--', alpha=0.5, label='1:1 line')
+    ax1.legend()
+
+    # Plot 2: BNPP fraction histogram
+    ax2 = axes[0, 1]
+    ax2.hist(valid_data['BNPP_fraction'], bins=50, alpha=0.7,
+            edgecolor='black', color='steelblue')
+    ax2.set_xlabel('BNPP fraction (BNPP/TNPP)', fontsize=11)
+    ax2.set_ylabel('Frequency', fontsize=11)
+    ax2.set_title('Distribution of BNPP Fraction', fontsize=12, fontweight='bold')
+    ax2.axvline(valid_data['BNPP_fraction'].mean(), color='red',
+               linestyle='--', linewidth=2, label=f"Mean: {valid_data['BNPP_fraction'].mean():.3f}")
+    ax2.axvline(valid_data['BNPP_fraction'].median(), color='green',
+               linestyle='--', linewidth=2, label=f"Median: {valid_data['BNPP_fraction'].median():.3f}")
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+
+    # Plot 3: TNPP components stacked bar (mean values by continent)
+    ax3 = axes[1, 0]
+    continent_means = valid_data.groupby('Continent')[['BNPP', 'ANPP']].mean()
+    x_pos = np.arange(len(continent_means))
+
+    ax3.bar(x_pos, continent_means['BNPP'], label='BNPP', alpha=0.8, color='brown')
+    ax3.bar(x_pos, continent_means['ANPP'], bottom=continent_means['BNPP'],
+           label='ANPP', alpha=0.8, color='green')
+
+    ax3.set_xticks(x_pos)
+    ax3.set_xticklabels(continent_means.index, rotation=45, ha='right')
+    ax3.set_ylabel('NPP (g/m²/year)', fontsize=11)
+    ax3.set_title('Mean BNPP and ANPP by Continent', fontsize=12, fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3, axis='y')
+
+    # Plot 4: BNPP fraction by continent boxplot
+    ax4 = axes[1, 1]
+    continents = valid_data['Continent'].unique()
+    continent_fractions = [valid_data[valid_data['Continent'] == cont]['BNPP_fraction'].values
+                          for cont in continents]
+
+    bp = ax4.boxplot(continent_fractions, tick_labels=continents, patch_artist=True)
+    colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightpink', 'lightgray']
+    for patch, color in zip(bp['boxes'], colors[:len(continents)]):
+        patch.set_facecolor(color)
+
+    ax4.set_ylabel('BNPP fraction', fontsize=11)
+    ax4.set_title('BNPP Fraction Distribution by Continent', fontsize=12, fontweight='bold')
+    ax4.grid(True, alpha=0.3, axis='y')
+    plt.setp(ax4.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    plt.tight_layout()
+
+    prod_file = f"{OUTPUT_DIR}/grassland_productivity_comparison.png"
+    plt.savefig(prod_file, dpi=300, bbox_inches='tight')
+    print(f"Productivity comparison plot saved to: {prod_file}")
+
+    return prod_file
 
 # =============================================================================
 # MAIN EXECUTION
@@ -428,7 +553,7 @@ def create_continental_comparison(bnpp_data):
 def main():
     """Main execution function."""
     print("=" * 60)
-    print("GRASSLAND BNPP DATA PROCESSING")
+    print("GRASSLAND PRODUCTIVITY DATA PROCESSING")
     print("=" * 60)
     
     # Step 1: Download data
@@ -468,9 +593,10 @@ def main():
     bnpp_data = extract_bnpp_data(df)
     
     # Save processed data
-    output_file = f"{OUTPUT_DIR}/grassland_bnpp_data.csv"
+    output_file = f"{OUTPUT_DIR}/grassland_productivity_data.csv"
     bnpp_data.to_csv(output_file, index=False, encoding='utf-8')
-    print(f"Processed BNPP data saved to: {output_file}")
+    print(f"Processed productivity data saved to: {output_file}")
+    print(f"Includes: BNPP, ANPP, TNPP, and BNPP fraction")
     
     # Step 5: Analyze data
     print("\\n5. DATA ANALYSIS")
@@ -483,11 +609,15 @@ def main():
     create_global_map(bnpp_data)
     create_histograms(bnpp_data)
     create_continental_comparison(bnpp_data)
-    
+    create_productivity_comparison(bnpp_data)
+
     print("\\n" + "=" * 60)
     print("PROCESSING COMPLETE")
     print("=" * 60)
     print(f"Total BNPP measurements processed: {len(bnpp_data)}")
+    print(f"Measurements with ANPP data: {bnpp_data['ANPP'].notna().sum()}")
+    print(f"Measurements with TNPP data: {bnpp_data['TNPP'].notna().sum()}")
+    print(f"Measurements with BNPP fraction: {bnpp_data['BNPP_fraction'].notna().sum()}")
     print(f"Geographic coverage: {bnpp_data['Continent'].nunique()} continents, {bnpp_data['Country'].nunique()} countries")
     print(f"Output directory: {OUTPUT_DIR}")
 

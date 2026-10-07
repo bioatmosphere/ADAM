@@ -7,6 +7,7 @@ worldwide BNPP predictions at 0.5-degree resolution.
 Data sources for global application:
 - TerraClimate: Global climate variables (aet, pet, ppt, tmax, tmin, vpd)
 - GLASS: Global GPP satellite data from HDF tiles
+- SoilGrids: Mean soil property values from training data
 - Output: Global BNPP predictions at 0.5-degree resolution
 
 Author: TAM Development Team
@@ -16,10 +17,14 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
+# import cartopy.crs as ccrs
+# import cartopy.features as cfeatures
 from pathlib import Path
 import pickle
 import warnings
 from typing import Tuple, Dict
+# import rasterio
+# from rasterio.transform import from_bounds
 import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
@@ -27,46 +32,39 @@ from sklearn.preprocessing import StandardScaler
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
-# Set device for prediction
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
-
 
 class BP_MLP(nn.Module):
-    """Belowground Productivity (BP) Multi-Layer Perceptron model."""
-    
-    def __init__(self, input_size, hidden_sizes, output_size, dropout_rate=0.2):
-        """
-        Initialize an instance of the MLP model.
-        
-        Args:
-            input_size (int): Size of the input layer.
-            hidden_sizes (list): List of sizes for the hidden layers.
-            output_size (int): Size of the output layer.
-            dropout_rate (float): Dropout rate for regularization.
-        """
+    """
+    Multi-Layer Perceptron for Below-ground Primary Productivity prediction.
+    Dynamically builds architecture to match the saved model state dict.
+    """
+    def __init__(self, input_size: int, hidden_sizes: list, dropout_rate: float = 0.2):
         super(BP_MLP, self).__init__()
-        
+
+        # Build the model structure dynamically based on hidden_sizes
+        # Match the exact structure: Linear, ReLU, Dropout for each hidden layer
+        # EXCEPT the last hidden layer which has NO dropout
         layers = []
-        in_size = input_size
-        
+        prev_size = input_size
+
+        # Add hidden layers dynamically
         for i, hidden_size in enumerate(hidden_sizes):
-            layers.append(nn.Linear(in_size, hidden_size))
+            layers.append(nn.Linear(prev_size, hidden_size))
             layers.append(nn.ReLU())
-            if i < len(hidden_sizes) - 1:  # Don't add dropout before output layer
+            # Only add dropout if this is NOT the last hidden layer
+            if i < len(hidden_sizes) - 1:
                 layers.append(nn.Dropout(dropout_rate))
-            in_size = hidden_size
-            
-        # Output layer
-        layers.append(nn.Linear(in_size, output_size))
-        
+            prev_size = hidden_size
+
+        # Output layer (single neuron for regression)
+        layers.append(nn.Linear(prev_size, 1))
+
         self.model = nn.Sequential(*layers)
-        
+
     def forward(self, x):
         return self.model(x)
 
-
-def load_trained_mlp_model(model_path: str = "../mlp_model_best.pkl") -> Tuple[BP_MLP, StandardScaler, Dict]:
+def load_trained_mlp_model(model_path: str = "/Users/6lw/Desktop/2_models/ADAM/src/models/mlp/mlp_model_best.pkl") -> Tuple[nn.Module, Dict]:
     """
     Load the trained MLP model and metadata.
     
@@ -74,7 +72,7 @@ def load_trained_mlp_model(model_path: str = "../mlp_model_best.pkl") -> Tuple[B
         model_path: Path to the saved MLP model file
         
     Returns:
-        Tuple of (model, scaler, model metadata)
+        Tuple of (model, model metadata)
     """
     model_path = Path(model_path)
     
@@ -86,25 +84,40 @@ def load_trained_mlp_model(model_path: str = "../mlp_model_best.pkl") -> Tuple[B
     with open(model_path, 'rb') as f:
         model_data = pickle.load(f)
     
-    # Reconstruct model
+    # Reconstruct model from architecture
     arch = model_data['model_architecture']
-    model = BP_MLP(arch['input_size'], arch['hidden_sizes'], arch['output_size'], arch['dropout_rate'])
+    model = BP_MLP(
+        input_size=arch['input_size'],
+        hidden_sizes=arch['hidden_sizes'],
+        dropout_rate=arch.get('dropout_rate', 0.2)  # Use the actual dropout rate from saved config
+    )
+    
+    # Load state dict
     model.load_state_dict(model_data['model_state_dict'])
-    model = model.to(device)
     model.eval()
     
     scaler = model_data['scaler']
     metrics = model_data['metrics']
-    
+
+    # Get feature names from the scaler (most reliable source)
+    if hasattr(scaler, 'feature_names_in_'):
+        feature_names = list(scaler.feature_names_in_)
+    else:
+        # Fallback to BNPP_fraction training features
+        feature_names = ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
+                        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+                        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+                        'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation']
+
     print(f"Model loaded successfully!")
-    print(f"Model performance - Test R²: {metrics['test_r2']:.4f}")
     print(f"Model architecture: {arch['hidden_sizes']}")
-    print(f"Input features: {arch['input_size']}")
-    
-    return model, scaler, model_data
+    print(f"Model performance - Test R²: {metrics['test_r2']:.4f}")
+    print(f"Required features ({len(feature_names)}): {feature_names}")
+
+    return model, model_data
 
 
-def load_global_terraclimate_data(data_dir: str = "../../../ancillary/terraclimate", year: int = 2010) -> xr.Dataset:
+def load_global_terraclimate_data(data_dir: str = "/Users/6lw/Desktop/2_models/ADAM/ancillary/terraclimate", year: int = 2010) -> xr.Dataset:
     """
     Load global TerraClimate data for specified year.
     
@@ -148,50 +161,33 @@ def load_global_terraclimate_data(data_dir: str = "../../../ancillary/terraclima
     return combined_ds
 
 
-def create_global_gpp_grid(year: int = 2010, resolution: float = 0.5) -> xr.DataArray:
+def load_glass_gpp_data(gpp_file: str = "/Users/6lw/Desktop/2_models/ADAM/ancillary/glass/global_gpp_yearly_2010_0.5deg_FIXED.nc") -> xr.DataArray:
     """
-    Create a global GPP grid by averaging available GLASS data.
-    
-    For simplicity, this creates a synthetic GPP field based on latitude.
-    In a full implementation, this would process all GLASS HDF tiles.
-    
+    Load GLASS GPP data for ecological filtering (not used as model feature).
+
     Args:
-        year: Year for GPP data
-        resolution: Spatial resolution in degrees
-        
+        gpp_file: Path to GLASS GPP NetCDF file
+
     Returns:
         Global GPP DataArray
     """
-    print(f"Creating global GPP grid for {year}...")
-    
-    # Create lat/lon coordinates
-    lat = np.arange(-89.75, 90, resolution)
-    lon = np.arange(-179.75, 180, resolution)
-    
-    # Create simple GPP pattern based on latitude (higher at equator)
-    # This is a placeholder - in reality would use processed GLASS tiles
-    gpp_values = np.zeros((len(lat), len(lon)))
-    
-    for i, lat_val in enumerate(lat):
-        # Simple latitudinal gradient for GPP
-        base_gpp = 1000 * np.exp(-((lat_val / 30) ** 2))  # Peak at equator
-        # Add some longitudinal variation
-        for j, lon_val in enumerate(lon):
-            seasonal_factor = 1 + 0.3 * np.sin(np.radians(lon_val))
-            gpp_values[i, j] = base_gpp * seasonal_factor
-    
-    # Create DataArray
-    gpp_da = xr.DataArray(
-        gpp_values,
-        dims=['lat', 'lon'],
-        coords={'lat': lat, 'lon': lon},
-        name='gpp_yearly',
-        attrs={'units': 'gC m-2 year-1', 'description': 'Annual GPP'}
-    )
-    
-    print(f"Global GPP grid created: {gpp_da.shape} points")
-    print(f"GPP range: {gpp_da.min().values:.1f} to {gpp_da.max().values:.1f} gC m-2 year-1")
-    
+    gpp_path = Path(gpp_file)
+
+    if not gpp_path.exists():
+        print(f"\n⚠️  GLASS GPP file not found at: {gpp_path}")
+        print("=" * 60)
+        print("To create the GLASS GPP NetCDF file, run:")
+        print("cd ../../../ancillary")
+        print("python export_glass_to_netcdf.py --year 2010")
+        print("=" * 60)
+        raise FileNotFoundError(f"GLASS GPP NetCDF not found. Please run export_glass_to_netcdf.py first.")
+
+    print(f"\nLoading GLASS GPP data from: {gpp_path}")
+    gpp_da = xr.open_dataarray(gpp_path)
+    print(f"  GPP data shape: {gpp_da.shape}")
+    print(f"  GPP range: {gpp_da.min().values:.1f} to {gpp_da.max().values:.1f} gC m⁻² yr⁻¹")
+    print(f"  GPP mean: {gpp_da.mean().values:.1f} gC m⁻² yr⁻¹")
+
     return gpp_da
 
 
@@ -230,68 +226,125 @@ def interpolate_to_common_grid(climate_ds: xr.Dataset, gpp_da: xr.DataArray,
     return combined
 
 
-def prepare_global_features(dataset: xr.Dataset, required_features: list) -> pd.DataFrame:
+def get_training_data_soil_means() -> dict:
+    """
+    Load training data to get mean soil property values for global application.
+    
+    Returns:
+        Dictionary with mean soil property values
+    """
+    # Load the aggregated training data
+    training_path = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/aggregated_data.csv"
+    
+    if not Path(training_path).exists():
+        raise FileNotFoundError(f"Training data not found at {training_path}")
+    
+    df = pd.read_csv(training_path)
+    
+    # Calculate mean values for all non-climate properties (soil + topography)
+    # These match what was used in BNPP_fraction training
+    soil_properties = [
+        'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+        'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+        'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation'
+    ]
+    
+    soil_means = {}
+    for prop in soil_properties:
+        if prop in df.columns:
+            soil_means[prop] = df[prop].mean(skipna=True)
+    
+    print("Using mean soil property values from training data:")
+    for prop, value in soil_means.items():
+        print(f"  {prop}: {value:.3f}")
+    
+    return soil_means
+
+def prepare_global_features(dataset: xr.Dataset, required_features: list) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Convert global xarray dataset to DataFrame for model prediction.
-    
+    For missing soil data, use mean values from training data.
+    GPP is kept separate for filtering only (NOT used as model feature).
+
     Args:
-        dataset: Combined global dataset
-        required_features: List of features required by the model
-        
+        dataset: Combined global dataset (includes GPP for filtering)
+        required_features: List of features required by the model (excludes GPP)
+
     Returns:
-        DataFrame with global features
+        Tuple of (features DataFrame, coordinates DataFrame, GPP DataFrame)
     """
-    print("Preparing global features for MLP model application...")
-    
+    print("\nPreparing global features for model application...")
+
     # Create meshgrid of coordinates
     lat_vals, lon_vals = np.meshgrid(dataset.lat.values, dataset.lon.values, indexing='ij')
-    
+
     # Create DataFrame manually to avoid duplicate column issues
     data_dict = {}
     data_dict['lat'] = lat_vals.flatten()
     data_dict['lon'] = lon_vals.flatten()
-    
-    # Add each variable
+
+    # Add each variable from dataset
     for var in dataset.data_vars:
         values = dataset[var].values.flatten()
         data_dict[var] = values
-    
+
     df = pd.DataFrame(data_dict)
-    
-    # Remove NaN values
+
+    # Remove NaN values (ocean, invalid data)
     df_clean = df.dropna()
-    
-    # Check for required features
+
+    print(f"  Valid land grid points: {len(df_clean):,}")
+
+    # Extract GPP for filtering (do this BEFORE selecting model features)
+    if 'gpp_yearly' in df_clean.columns:
+        gpp_df = df_clean[['gpp_yearly']].copy()
+        print(f"  GPP data extracted for filtering (NOT used as model feature)")
+    else:
+        gpp_df = None
+        print(f"  Warning: GPP data not found for filtering")
+
+    # Check for missing features and add soil data means
+    # NOTE: required_features should NOT include gpp_yearly
     missing_features = [f for f in required_features if f not in df_clean.columns]
+
     if missing_features:
-        raise ValueError(f"Missing required features: {missing_features}")
-    
-    # Select only required features
+        print(f"  Missing features detected: {missing_features}")
+        print("  Adding mean values from training data...")
+
+        # Get soil means from training data
+        soil_means = get_training_data_soil_means()
+
+        # Add missing soil features using mean values
+        for feature in missing_features:
+            if feature in soil_means:
+                df_clean[feature] = soil_means[feature]
+                print(f"    Added {feature} = {soil_means[feature]:.3f}")
+            else:
+                raise ValueError(f"Cannot find mean value for missing feature: {feature}")
+
+    # Select only required features (excludes GPP)
     feature_df = df_clean[required_features].copy()
-    
-    # Get coordinates (ensure they exist)
-    coord_cols = []
-    if 'lat' in df_clean.columns:
-        coord_cols.append('lat')
-    if 'lon' in df_clean.columns:
-        coord_cols.append('lon')
-    
-    coords_df = df_clean[coord_cols].copy() if coord_cols else None
-    
-    print(f"Global features prepared: {len(feature_df)} valid grid points")
-    print(f"Feature columns: {list(feature_df.columns)}")
-    
-    return feature_df, coords_df
+
+    # Get coordinates
+    coord_cols = ['lat', 'lon']
+    coords_df = df_clean[coord_cols].copy()
+
+    print(f"  Global features prepared: {len(feature_df):,} grid points")
+    print(f"  Model feature columns: {list(feature_df.columns)}")
+    if gpp_df is not None:
+        print(f"  ✓ GPP available for ecological filtering")
+
+    return feature_df, coords_df, gpp_df
 
 
-def apply_mlp_model_globally(model: BP_MLP, scaler: StandardScaler, features_df: pd.DataFrame) -> np.ndarray:
+def apply_mlp_model_globally(model: nn.Module, features_df: pd.DataFrame, scaler: StandardScaler) -> np.ndarray:
     """
     Apply MLP model to global features.
     
     Args:
         model: Trained MLP model
-        scaler: Fitted StandardScaler for feature normalization
         features_df: Global features DataFrame
+        scaler: Fitted scaler for feature normalization
         
     Returns:
         Array of global BNPP predictions
@@ -301,183 +354,278 @@ def apply_mlp_model_globally(model: BP_MLP, scaler: StandardScaler, features_df:
     # Scale features
     features_scaled = scaler.transform(features_df)
     
-    # Convert to tensor and make predictions
+    # Convert to tensor
+    features_tensor = torch.FloatTensor(features_scaled)
+    
+    # Make predictions
     model.eval()
     with torch.no_grad():
-        features_tensor = torch.FloatTensor(features_scaled).to(device)
-        
-        # Process in batches to avoid memory issues
-        batch_size = 10000
-        predictions = []
-        
-        for i in range(0, len(features_tensor), batch_size):
-            batch = features_tensor[i:i+batch_size]
-            batch_pred = model(batch).squeeze().cpu().numpy()
-            predictions.extend(batch_pred if batch_pred.ndim > 0 else [batch_pred])
-    
-    predictions = np.array(predictions)
-    
-    print(f"Global MLP predictions complete!")
-    print(f"BNPP range: {predictions.min():.1f} to {predictions.max():.1f} gC m-2 year-1")
-    print(f"Mean BNPP: {predictions.mean():.1f} gC m-2 year-1")
-    
-    return predictions
+        predictions_tensor = model(features_tensor)
+        predictions = predictions_tensor.numpy().flatten()
+
+    # Clip predictions to valid range [0, 1] for BNPP fraction
+    # Neural networks can extrapolate beyond training range, so we constrain to physical bounds
+    predictions_clipped = np.clip(predictions, 0.0, 1.0)
+    n_clipped = np.sum((predictions < 0) | (predictions > 1))
+
+    print(f"  Global predictions complete (before ecological filtering)!")
+    print(f"  BNPP_fraction range: {predictions_clipped.min():.4f} to {predictions_clipped.max():.4f}")
+    print(f"  Mean BNPP_fraction: {predictions_clipped.mean():.4f}")
+    print(f"  Median BNPP_fraction: {np.median(predictions_clipped):.4f}")
+    if n_clipped > 0:
+        print(f"  Note: {n_clipped} predictions ({n_clipped/len(predictions)*100:.1f}%) were clipped to [0, 1] range")
+
+    return predictions_clipped
 
 
-def create_global_prediction_map(predictions: np.ndarray, coords_df: pd.DataFrame, 
-                                output_path: str = "global_bnpp_predictions_mlp.nc") -> xr.DataArray:
+def apply_ecological_constraints(predictions: np.ndarray,
+                                 gpp_df: pd.DataFrame,
+                                 gpp_threshold: float = 100.0) -> Tuple[np.ndarray, dict]:
     """
-    Create global map of BNPP predictions.
-    
+    Apply ecological constraints using GPP to filter out non-productive areas.
+
+    Masks predictions in areas where GPP is very low, indicating:
+    - Antarctica, Greenland, ice sheets
+    - Extreme deserts (Sahara, Arabian, Gobi)
+    - Barren/rock areas with minimal vegetation
+
     Args:
-        predictions: Array of BNPP predictions
+        predictions: Raw BNPP_fraction predictions
+        gpp_df: DataFrame with GPP values (gC m⁻² yr⁻¹)
+        gpp_threshold: Minimum GPP for valid prediction (default: 100 gC m⁻² yr⁻¹)
+
+    Returns:
+        Tuple of (constrained predictions, statistics dict)
+    """
+    print(f"\nApplying GPP-based ecological constraints...")
+    print(f"  GPP threshold: > {gpp_threshold} gC m⁻² yr⁻¹")
+    print(f"  Rationale: BNPP_fraction is only meaningful where vegetation productivity exists")
+
+    # Get GPP values
+    gpp_values = gpp_df['gpp_yearly'].values
+
+    # Create mask for valid predictions (GPP above threshold)
+    valid_mask = gpp_values > gpp_threshold
+
+    # Count filtered pixels
+    n_total = len(predictions)
+    n_filtered = (~valid_mask).sum()
+    n_kept = valid_mask.sum()
+
+    print(f"\n  Filtering results:")
+    print(f"    Total predictions: {n_total:,}")
+    print(f"    Filtered (GPP ≤ {gpp_threshold}): {n_filtered:,} ({n_filtered/n_total*100:.1f}%)")
+    print(f"    Valid predictions (GPP > {gpp_threshold}): {n_kept:,} ({n_kept/n_total*100:.1f}%)")
+
+    # Create constrained predictions
+    constrained_predictions = predictions.copy()
+    constrained_predictions[~valid_mask] = np.nan
+
+    # Calculate statistics on valid predictions only
+    valid_predictions = constrained_predictions[~np.isnan(constrained_predictions)]
+    valid_gpp = gpp_values[valid_mask]
+
+    stats = {
+        'n_total': n_total,
+        'n_filtered': n_filtered,
+        'n_kept': len(valid_predictions),
+        'filter_percentage': (n_filtered / n_total) * 100,
+        'min': valid_predictions.min() if len(valid_predictions) > 0 else np.nan,
+        'max': valid_predictions.max() if len(valid_predictions) > 0 else np.nan,
+        'mean': valid_predictions.mean() if len(valid_predictions) > 0 else np.nan,
+        'median': np.median(valid_predictions) if len(valid_predictions) > 0 else np.nan,
+        'std': valid_predictions.std() if len(valid_predictions) > 0 else np.nan,
+        'gpp_min': valid_gpp.min() if len(valid_gpp) > 0 else np.nan,
+        'gpp_max': valid_gpp.max() if len(valid_gpp) > 0 else np.nan,
+        'gpp_mean': valid_gpp.mean() if len(valid_gpp) > 0 else np.nan
+    }
+
+    print(f"\n  Ecologically constrained BNPP_fraction statistics:")
+    print(f"    Valid predictions: {stats['n_kept']:,}")
+    print(f"    BNPP_fraction range: {stats['min']:.4f} - {stats['max']:.4f}")
+    print(f"    BNPP_fraction mean: {stats['mean']:.4f}")
+    print(f"    BNPP_fraction median: {stats['median']:.4f}")
+    print(f"\n  GPP statistics for valid areas:")
+    print(f"    GPP range: {stats['gpp_min']:.1f} - {stats['gpp_max']:.1f} gC m⁻² yr⁻¹")
+    print(f"    GPP mean: {stats['gpp_mean']:.1f} gC m⁻² yr⁻¹")
+
+    return constrained_predictions, stats
+
+
+def create_global_prediction_map(predictions: np.ndarray, coords_df: pd.DataFrame,
+                                output_path: str = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/global_bnpp_fraction_predictions_mlp_gpp_constrained.nc") -> xr.DataArray:
+    """
+    Create global map of BNPP fraction predictions.
+
+    Args:
+        predictions: Array of BNPP fraction predictions (0-1 scale)
         coords_df: DataFrame with lat/lon coordinates
         output_path: Path to save output file
-        
+
     Returns:
-        Global BNPP DataArray
+        Global BNPP fraction DataArray
     """
-    print("Creating global BNPP prediction map...")
-    
+    print("Creating global BNPP fraction prediction map...")
+
     # Create DataFrame with predictions and coordinates
     result_df = coords_df.copy()
-    result_df['bnpp_predicted'] = predictions
+    result_df['bnpp_fraction_predicted'] = predictions
     
     # Define target grid
     lat_bins = np.arange(-90, 90.5, 0.5)
     lon_bins = np.arange(-180, 180.5, 0.5)
     
     # Create empty grid
-    bnpp_grid = np.full((len(lat_bins)-1, len(lon_bins)-1), np.nan)
-    
+    bnpp_fraction_grid = np.full((len(lat_bins)-1, len(lon_bins)-1), np.nan)
+
     # Fill grid with predictions
     for _, row in result_df.iterrows():
         lat_idx = np.digitize(row['lat'], lat_bins) - 1
         lon_idx = np.digitize(row['lon'], lon_bins) - 1
-        
+
         if 0 <= lat_idx < len(lat_bins)-1 and 0 <= lon_idx < len(lon_bins)-1:
-            bnpp_grid[lat_idx, lon_idx] = row['bnpp_predicted']
+            bnpp_fraction_grid[lat_idx, lon_idx] = row['bnpp_fraction_predicted']
     
     # Create DataArray
     lat_centers = (lat_bins[:-1] + lat_bins[1:]) / 2
     lon_centers = (lon_bins[:-1] + lon_bins[1:]) / 2
-    
-    bnpp_da = xr.DataArray(
-        bnpp_grid,
+
+    bnpp_fraction_da = xr.DataArray(
+        bnpp_fraction_grid,
         dims=['lat', 'lon'],
         coords={'lat': lat_centers, 'lon': lon_centers},
-        name='bnpp_predicted',
+        name='bnpp_fraction',
         attrs={
-            'units': 'gC m-2 year-1',
-            'description': 'Global BNPP predictions from MLP model',
-            'model': 'Multi-Layer Perceptron',
-            'features': 'TerraClimate + GLASS GPP'
+            'units': 'dimensionless (0-1 scale)',
+            'long_name': 'BNPP Fraction (BNPP/TNPP)',
+            'description': 'Global BNPP fraction predictions from MLP model with GPP-based ecological constraints',
+            'model': 'Multi-Layer Perceptron (4 layers: 256-128-64-32)',
+            'features': 'TerraClimate climate (aet, pet, ppt, tmax, tmin, vpd) + SoilGrids soil properties (training means)',
+            'constraints': 'Filtered areas with GPP ≤ 0 gC m⁻² yr⁻¹ (GLASS satellite data)',
+            'constraint_rationale': 'GPP used for filtering only, NOT as model predictor. Removes non-vegetated areas only.',
+            'note': 'Values represent the fraction of total NPP allocated belowground. NaN indicates areas with no vegetation (GPP = 0).',
+            'valid_range': '0.0 to 1.0'
         }
     )
-    
+
     # Save to file
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    bnpp_da.to_netcdf(output_path)
-    print(f"Global MLP BNPP predictions saved to: {output_path}")
-    
-    return bnpp_da
+    bnpp_fraction_da.to_netcdf(output_path)
+    print(f"Global BNPP fraction predictions saved to: {output_path}")
+
+    return bnpp_fraction_da
 
 
-def plot_global_bnpp_map(bnpp_da: xr.DataArray, save_path: str = "global_bnpp_map_mlp.png"):
+def plot_global_bnpp_map(bnpp_fraction_da: xr.DataArray, save_path: str = "/Users/6lw/Desktop/2_models/ADAM/productivity/earth/global_bnpp_fraction_map_mlp_gpp_constrained.png"):
     """
-    Create global map visualization of BNPP predictions.
-    
+    Create global map visualization of BNPP fraction predictions.
+
     Args:
-        bnpp_da: Global BNPP DataArray
+        bnpp_fraction_da: Global BNPP fraction DataArray (0-1 scale)
         save_path: Path to save the plot
     """
-    print("Creating global MLP BNPP map visualization...")
-    
+    print("\nCreating global BNPP fraction map visualization...")
+
     fig, ax = plt.subplots(1, 1, figsize=(15, 8))
-    
-    # Plot BNPP data
-    im = bnpp_da.plot(
+
+    # Plot BNPP fraction data
+    im = bnpp_fraction_da.plot(
         ax=ax,
-        cmap='YlOrRd',
-        vmin=0,
-        vmax=np.nanpercentile(bnpp_da.values, 95),
+        cmap='RdYlGn',  # Red-Yellow-Green colormap
+        vmin=0.0,
+        vmax=1.0,  # Fixed range for fractions
         add_colorbar=False
     )
-    
+
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.8)
-    cbar.set_label('BNPP (gC m⁻² year⁻¹)', fontsize=12)
-    
-    plt.title('Global Belowground Net Primary Productivity (BNPP)\nMLP Model Predictions', 
+    cbar.set_label('BNPP Fraction (BNPP/TNPP)', fontsize=12)
+
+    plt.title('Global BNPP Fraction\nMLP Model - GPP-Based Ecologically Constrained',
               fontsize=14, pad=20)
-    
+
     ax.set_xlabel('Longitude')
     ax.set_ylabel('Latitude')
-    
+
     plt.tight_layout()
-    
+
     # Save plot
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-    print(f"Global MLP BNPP map saved to: {save_path}")
+    print(f"Global BNPP fraction map saved to: {save_path}")
     plt.close()
 
 
 def main():
     """
-    Main function to apply MLP model globally.
+    Main function to apply MLP model globally for BNPP fraction prediction.
     """
     try:
         print("="*60)
-        print("GLOBAL MLP BNPP PREDICTION")
+        print("GLOBAL MLP BNPP FRACTION PREDICTION")
         print("="*60)
         
         # 1. Load trained MLP model
-        model, scaler, model_data = load_trained_mlp_model()
-        
-        # Determine required features from MLP training
-        # Since MLP doesn't store feature names like RF, we use the known features
-        required_features = ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd', 'gpp_yearly']
+        model, model_data = load_trained_mlp_model()
+        # Get feature names from the scaler (the actual features the model was trained with)
+        if hasattr(model_data['scaler'], 'feature_names_in_'):
+            required_features = list(model_data['scaler'].feature_names_in_)
+        else:
+            # Fallback: BNPP_fraction model uses these 17 features (not gpp_yearly!)
+            required_features = ['aet', 'pet', 'ppt', 'tmax', 'tmin', 'vpd',
+                                'soil_carbon_stock', 'clay_content', 'silt_content', 'sand_content',
+                                'nitrogen_content', 'cation_exchange_capacity', 'ph_in_water',
+                                'bulk_density', 'coarse_fragments', 'soil_moisture', 'elevation']
+        scaler = model_data['scaler']
         
         # 2. Load global climate data
         climate_ds = load_global_terraclimate_data(year=2010)
         
-        # 3. Create global GPP data
-        gpp_da = create_global_gpp_grid(year=2010)
+        # 3. Load GLASS GPP data for ecological filtering
+        print("\n[3/9] Loading GLASS GPP data...")
+        gpp_da = load_glass_gpp_data()
         
         # 4. Interpolate to common grid
         combined_ds = interpolate_to_common_grid(climate_ds, gpp_da)
         
         # 5. Prepare features for model
-        features_df, coords_df = prepare_global_features(combined_ds, required_features)
+        features_df, coords_df, gpp_df = prepare_global_features(combined_ds, required_features)
         
         # 6. Apply MLP model globally
-        predictions = apply_mlp_model_globally(model, scaler, features_df)
+        predictions = apply_mlp_model_globally(model, features_df, scaler)
         
-        # 7. Create global prediction map
-        bnpp_da = create_global_prediction_map(predictions, coords_df)
-        
-        # 8. Plot global map
+        # 7. Apply GPP-based ecological constraints
+        print("\n[7/9] Applying GPP-based ecological constraints...")
+        constrained_predictions, stats = apply_ecological_constraints(
+            predictions,
+            gpp_df,
+            gpp_threshold=0.0
+        )
+
+        # 8. Create global prediction map
+        print("\n[8/9] Creating outputs...")
+        bnpp_da = create_global_prediction_map(constrained_predictions, coords_df)
+
+        # 9. Plot global map
         plot_global_bnpp_map(bnpp_da)
         
         # 9. Print summary statistics
         print("\n" + "="*60)
-        print("GLOBAL MLP BNPP PREDICTION SUMMARY")
+        print("GLOBAL BNPP FRACTION PREDICTION SUMMARY")
         print("="*60)
-        print(f"Total valid grid points: {len(predictions):,}")
-        print(f"Global BNPP statistics:")
-        print(f"  Minimum: {predictions.min():.1f} gC m⁻² year⁻¹")
-        print(f"  Maximum: {predictions.max():.1f} gC m⁻² year⁻¹")
-        print(f"  Mean: {predictions.mean():.1f} gC m⁻² year⁻¹")
-        print(f"  Median: {np.median(predictions):.1f} gC m⁻² year⁻¹")
-        print(f"  Standard deviation: {predictions.std():.1f} gC m⁻² year⁻¹")
-        
-        total_bnpp = predictions.sum() * (0.5 * 111)**2  # Convert to global total (rough)
-        print(f"\nEstimated global BNPP: {total_bnpp/1e15:.2f} Pg C year⁻¹")
-        
-        print("\nGlobal MLP application completed successfully!")
+        print(f"Total valid grid points: {len(constrained_predictions):,}")
+        print(f"Global BNPP Fraction statistics:")
+        print(f"  Minimum: {constrained_predictions.min():.4f}")
+        print(f"  Maximum: {constrained_predictions.max():.4f}")
+        print(f"  Mean: {constrained_predictions.mean():.4f}")
+        print(f"  Median: {np.median(constrained_predictions):.4f}")
+        print(f"  Standard deviation: {constrained_predictions.std():.4f}")
+
+        print("\nGlobal MLP BNPP fraction application completed successfully!")
+        print("\nNote: Predictions represent the fraction of total NPP allocated belowground (BNPP/TNPP)")
+        print("      Values are constrained to [0, 1] range for physical validity")
         
     except Exception as e:
         print(f"Error in global MLP application: {e}")
