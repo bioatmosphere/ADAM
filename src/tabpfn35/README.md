@@ -107,8 +107,15 @@ unsampled regimes are left unpredicted rather than coloured in.
 ## Reproducing this from a fresh clone
 
 Everything in the Results section reproduces from what is committed here, plus a
-TabPFN API token. `run.py check` prints the state of each input and which
-commands it unblocks.
+TabPFN API token. The raw source datasets are *not* needed: the data the model
+actually consumes -- the training table it is fitted on, and the predictor stack
+it is applied to -- travel with the repository. `run.py check` prints the state
+of each input and which commands it unblocks.
+
+Inference is deterministic: re-running the random split against the API with
+`random_state=42` reproduces the stored R² of 0.540008 and RMSE of 0.141131
+exactly, so a reviewer's numbers should match these digit for digit rather than
+merely closely.
 
 **Committed with the submission (9 MB)**
 
@@ -134,9 +141,9 @@ number and every figure in this submission.
 | Elevation, `ancillary/elevation/global_elevation_0.5deg.nc` | 2 MB | `python src/ancillary/download_global_elevation.py` |
 
 The soil-moisture field is the reason the stack travels with the submission
-rather than being treated as a build artefact: it cannot be re-downloaded, so
-shipping the 0.5° stack is what makes the global prediction independently
-reproducible. `stack_provenance_check.csv` is the audit trail for that stack —
+rather than being treated as a build artefact: it cannot be re-downloaded at
+all, so shipping the 0.5° stack is what makes the global prediction
+independently reproducible. `stack_provenance_check.csv` is the audit trail for that stack —
 it shows the committed layers reproducing the training table's own values at all
 529 coordinates.
 
