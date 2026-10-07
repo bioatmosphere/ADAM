@@ -35,4 +35,5 @@ dependencies = [
     "dask>=2025.10.0",
     "shap>=0.49.1",
     "earthengine-api>=1.7.3",
+    "tabpfn-client>=0.6.1",
 ]

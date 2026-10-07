@@ -1,0 +1,31 @@
+Training on 530 rows (site means) from 530 coordinates
+Land cells in stack: 95,447
+Applicability domain (threshold 2.88): 44,788 cells in domain (46.9% of land)
+Cells to predict: 44,788 (in domain)
+TabPFN API ready (model v3.5)
+Cost estimate for the global pass: {'estimated_cost': 10409, 'pricing_version': 'quota_v3', 'inputs': EstimateCostRequest(train_rows=530, raw_columns=17, test_rows=44788, model_version=<ModelVersion.V3_5: 'v3.5'>, operation=<QuotaOperation.PREDICT: 'predict'>, n_estimators=8, thinking_effort=None)}
+API usage before: Currently, you have used 980000 of the allowed limit of 20000000 credits. The limit will reset at 2026-11-01 00:00:00 UTC.
+  fitted on 530 rows x 17 features in 4.2s
+  predicting 44,788 rows in 5 batch(es) of up to 10,000
+    batch 1/5 (10,000 rows, 6s elapsed)
+    batch 2/5 (20,000 rows, 11s elapsed)
+    batch 3/5 (30,000 rows, 17s elapsed)
+    batch 4/5 (40,000 rows, 21s elapsed)
+    batch 5/5 (44,788 rows, 25s elapsed)
+API usage after: Currently, you have used 1080000 of the allowed limit of 20000000 credits. The limit will reset at 2026-11-01 00:00:00 UTC.
+
+Predictions written to /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35/global_bnpp_fraction_tabpfn35.nc
+{
+  "cells_predicted": 44788,
+  "median_of_medians": 0.41602233052253723,
+  "mean_of_medians": 0.4765197833053614,
+  "p5": 0.22458944618701934,
+  "p95": 0.7472688406705857,
+  "mean_interval_width": 0.44811688679221956,
+  "in_domain_cells": 44788,
+  "land_cells": 95447
+}
+  wrote /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35/figures/global_bnpp_fraction_tabpfn35.png
+  wrote /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35/figures/global_bnpp_fraction_uncertainty.png
+  wrote /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35/figures/latitudinal_profile.png
+  wrote /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35/figures/applicability_domain.png

@@ -75,7 +75,8 @@ Desktop.ini
 *.model
 
 # Output directories
-output/
+output/*
+!output/tabpfn35/
 results/
 figures/
 plots/
@@ -101,3 +102,17 @@ processed_data/
 
 # Documentation builds
 docs/_build/
+
+# TabPFN-3.5 hackathon submission: the model outputs ship with the code.
+# These negations come last so they win over the generic *.nc / *.csv / *.json /
+# *.log / figures/ rules above.
+!output/tabpfn35/figures/
+!output/tabpfn35/figures/*.png
+!output/tabpfn35/*.csv
+!output/tabpfn35/*.json
+!output/tabpfn35/*.log
+!output/tabpfn35/global_bnpp_fraction_tabpfn35.nc
+# ...but not the per-batch API cache or the 7 MB predictor stack, which
+# `python -m src.tabpfn35.run stack` rebuilds from the source datasets.
+output/tabpfn35/prediction_batches/
+output/tabpfn35/global_predictor_stack_0.5deg.nc

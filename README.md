@@ -15,6 +15,38 @@ ADAM is a comprehensive data synthesis and machine learning pipeline for predict
 - **Global Predictions**: Applies trained models to worldwide land cover data
 - **Scientific Reproducibility**: Comprehensive logging and modular architecture
 
+## TabPFN-3.5 pipeline (branch `tabpfn3.5-hackthon`)
+
+`src/tabpfn35/` is a self-contained pipeline that predicts the belowground share
+of productivity (BNPP/TNPP) with **TabPFN-3.5 alone**, served by the Prior Labs
+API — no other model is involved in fitting, validation or global application.
+It was built for the TabPFN-3.5 Hackathon (Prior Labs, Sept–Oct 2026); see
+[`src/tabpfn35/README.md`](src/tabpfn35/README.md) for the full write-up.
+
+```bash
+export TABPFN_TOKEN="<token from platform.priorlabs.ai/account/api-keys>"
+uv run python -m src.tabpfn35.run all
+```
+
+What it adds over the 12-model benchmark:
+
+- **Honest validation.** The 5 837 records sit at 529 coordinates and every
+  predictor is a coordinate-level climatology, so a random split scores
+  memorisation. Blocked 5° spatial CV on one record per coordinate gives
+  R² = 0.38 (random split: 0.54).
+- **Uncertainty as a product.** Every grid cell carries TabPFN's 10th/50th/90th
+  posterior percentiles; the 80 % interval covers 82 % of held-out sites.
+- **An applicability domain.** Cells whose predictors fall outside the sampled
+  range are left unpredicted instead of being coloured in.
+- **A verified predictor stack.** Each global layer is rebuilt the way the
+  matching training column was built, and the stack is checked against the
+  training table at all 529 coordinates (`output/tabpfn35/stack_provenance_check.csv`).
+  This corrected three train/apply mismatches in the earlier global application:
+  climate summed instead of averaged over months (~12× off for ppt/aet/pet), soil
+  taken from OpenLandMap instead of SoilGrids, and the wrong soil-moisture file.
+
+Outputs land in `output/tabpfn35/`.
+
 ## Quick Start
 
 ### Prerequisites

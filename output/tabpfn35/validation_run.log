@@ -1,0 +1,60 @@
+Validating TabPFN-3.5 on 5,837 records at 529 coordinates (157 5-degree blocks)
+missing predictor values: 12.8% (passed to TabPFN as NaN, not imputed)
+TabPFN API ready (model v3.5)
+API usage before validation: Currently, you have used 380000 of the allowed limit of 20000000 credits. The limit will reset at 2026-11-01 00:00:00 UTC.
+
+random 80/20 split: 4669 train / 1168 test
+  fitted on 4669 rows x 17 features in 2.3s
+    R2 +0.540 | RMSE 0.1411 | MAE 0.0929 | bias -0.0197 | 80% interval coverage 0.810 (width 0.289)
+
+site grouped 5-fold CV over 529 groups
+  fold 1/5: 4669 train / 1168 test
+  fitted on 4669 rows x 17 features in 2.3s
+  fold 2/5: 4669 train / 1168 test
+  fitted on 4669 rows x 17 features in 2.1s
+  fold 3/5: 4670 train / 1167 test
+  fitted on 4670 rows x 17 features in 4.2s
+  fold 4/5: 4670 train / 1167 test
+  fitted on 4670 rows x 17 features in 2.2s
+  fold 5/5: 4670 train / 1167 test
+  fitted on 4670 rows x 17 features in 4.1s
+    R2 +0.053 | RMSE 0.2003 | MAE 0.1594 | bias +0.0169 | 80% interval coverage 0.595 (width 0.413)
+    per-fold R2: 0.142, -0.578, 0.064, 0.260, 0.074
+
+spatial grouped 5-fold CV over 157 groups
+  fold 1/5: 4669 train / 1168 test
+  fitted on 4669 rows x 17 features in 2.2s
+  fold 2/5: 4669 train / 1168 test
+  fitted on 4669 rows x 17 features in 4.2s
+  fold 3/5: 4670 train / 1167 test
+  fitted on 4670 rows x 17 features in 4.1s
+  fold 4/5: 4670 train / 1167 test
+  fitted on 4670 rows x 17 features in 4.2s
+  fold 5/5: 4670 train / 1167 test
+  fitted on 4670 rows x 17 features in 4.1s
+    R2 -0.151 | RMSE 0.2208 | MAE 0.1754 | bias +0.0533 | 80% interval coverage 0.705 (width 0.490)
+    per-fold R2: -0.610, 0.185, -0.125, -0.119, -0.062
+
+site_mean grouped 5-fold CV over 157 groups
+  fold 1/5: 424 train / 106 test
+  fitted on 424 rows x 17 features in 2.1s
+  fold 2/5: 424 train / 106 test
+  fitted on 424 rows x 17 features in 4.1s
+  fold 3/5: 424 train / 106 test
+  fitted on 424 rows x 17 features in 4.2s
+  fold 4/5: 424 train / 106 test
+  fitted on 424 rows x 17 features in 2.2s
+  fold 5/5: 424 train / 106 test
+  fitted on 424 rows x 17 features in 2.2s
+    R2 +0.378 | RMSE 0.1626 | MAE 0.1229 | bias +0.0088 | 80% interval coverage 0.821 (width 0.422)
+    per-fold R2: -0.129, 0.416, 0.511, 0.342, 0.355
+
+   scheme  n_test      r2   rmse    mae    bias  interval_coverage  interval_width
+   random    1168  0.5400 0.1411 0.0929 -0.0197             0.8099          0.2886
+     site    5837  0.0534 0.2003 0.1594  0.0169             0.5948          0.4126
+  spatial    5837 -0.1505 0.2208 0.1754  0.0533             0.7052          0.4900
+site_mean     530  0.3783 0.1626 0.1229  0.0088             0.8208          0.4224
+
+written to /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35
+API usage after validation: Currently, you have used 980000 of the allowed limit of 20000000 credits. The limit will reset at 2026-11-01 00:00:00 UTC.
+  wrote /Users/6lw/Desktop/2_models/ADAM/output/tabpfn35/figures/validation_scatter.png

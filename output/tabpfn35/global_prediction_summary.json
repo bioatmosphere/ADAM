@@ -1,0 +1,10 @@
+{
+  "cells_predicted": 44788,
+  "median_of_medians": 0.41602233052253723,
+  "mean_of_medians": 0.4765197833053614,
+  "p5": 0.22458944618701934,
+  "p95": 0.7472688406705857,
+  "mean_interval_width": 0.44811688679221956,
+  "in_domain_cells": 44788,
+  "land_cells": 95447
+}
