@@ -3,7 +3,7 @@
 
 ## Project Overview
 
-ADAM is a comprehensive data synthesis and machine learning pipeline for predicting Below-ground Net Primary Productivity (BNPP) across global ecosystems. The project integrates multiple global datasets and applies eight state-of-the-art machine learning models to create benchmark predictions for ecosystem productivity research.
+ADAM is a comprehensive data synthesis and machine learning pipeline for predicting, for instance, Below-ground Net Primary Productivity (BNPP), across global ecosystems. The project features integrating multiple global datasets and applies eight state-of-the-art machine learning models to create benchmark predictions for ecosystem productivity research.
 
 ## Key Features
 
@@ -97,6 +97,7 @@ ADAM/
 
 ## Data Sources
 
+### Observation and Reanalysis Data
 - **[ForC](https://github.com/forc-db/ForC)**: Global forest carbon database
 - **[TerraClimate](https://climate.northwestknowledge.net/TERRACLIMATE-DATA)**: Climate variables (1958-2019)
 - **[SoilGrids](https://soilgrids.org/)**: Global soil information
@@ -104,6 +105,14 @@ ADAM/
 - **[SYNMAP](https://www.earthenv.org/)**: Global vegetation mapping
 - **[SRTM](https://www2.jpl.nasa.gov/srtm/)**: Shuttle Radar Topography Mission elevation data
 - **Gherardi-Sala**: Grassland belowground productivity database
+
+### Climate Model Projections (CMIP6)
+- **[CMIP6](https://esgf-node.llnl.gov/)**: Coupled Model Intercomparison Project Phase 6
+  - CanESM5 (Canadian Centre for Climate Modelling and Analysis)
+  - CESM2 (National Center for Atmospheric Research)
+  - NorESM2-LM (Norwegian Climate Centre)
+  - Variable: nppRoot (Net Primary Production allocated to roots)
+  - Experiments: historical (1850-2014), dcppB-forecast (2025-2034)
 
 ## Pipeline Stages
 
@@ -159,6 +168,91 @@ The pipeline includes comprehensive outlier detection with multiple methods:
 - **Soil Physics (3)**: Bulk density, coarse fragments, soil moisture
 - **Topography (1)**: Elevation from SRTM
 
+## CMIP6 Climate Model Data Integration
+
+ADAM now includes comprehensive tools for working with CMIP6 climate model projections, specifically for root NPP (Net Primary Production) data.
+
+### Available Models
+- **CanESM5** (Canadian): r9i1p2f1 variant, historical (1850-2014) + dcppB-forecast (2025-2034)
+- **CESM2** (US NCAR): r1i1p1f1 variant, historical
+- **NorESM2-LM** (Norwegian): r1i1p1f1 variant, historical
+
+### CMIP6 Data Visualization
+
+Comprehensive visualization tool for CMIP6 NetCDF data:
+
+```bash
+cd src/cmip
+
+# Generate all visualizations
+uv run python visualize_cmip.py --all
+
+# Specific visualizations
+uv run python visualize_cmip.py --temporal-mean --seasonal-cycle
+uv run python visualize_cmip.py --time-series --lat 45 --lon -100
+uv run python visualize_cmip.py --animation
+
+# Custom file and output
+uv run python visualize_cmip.py \
+  --file ../../cmip/your_file.nc \
+  --output-dir ../../cmip/figures/your_model \
+  --all
+```
+
+**Features:**
+- Temporal mean maps with Robinson projection
+- Seasonal cycle analysis (global mean by month)
+- 6-panel temporal evolution snapshots
+- Location-specific time series with 12-month moving average
+- Animated GIF of temporal changes
+- Comprehensive statistical summary (6-panel analysis)
+- Automatic text summary report with metadata
+
+### Multi-Model Download Tools
+
+Search and download historical nppRoot data from multiple CMIP6 models:
+
+```bash
+# Search all available CMIP6 models
+uv run python src/download_multi_model_historical.py --all
+
+# Search specific models
+uv run python src/download_multi_model_historical.py \
+  --models CESM2 UKESM1-0-LL MPI-ESM1-2-LR
+
+# Test ESGF node connectivity
+cd src/cmip && uv run python test_esgf_nodes.py --connectivity-only
+
+# Check data availability for specific model
+cd src/cmip && uv run python test_esgf_nodes.py \
+  --model CanESM5 --experiment historical --variable nppRoot
+```
+
+### CMIP6 Directory Structure
+
+```
+cmip/
+├── figures/                           # Visualization outputs
+│   ├── CanESM5/
+│   ├── CESM2/
+│   └── NorESM2-LM/
+├── nppRoot_Lmon_*.nc                 # Downloaded NetCDF files
+├── ESGF_NODES.md                     # ESGF node documentation
+├── DOWNLOAD_INSTRUCTIONS.md          # Manual download guide
+├── DOWNLOAD_CHECKLIST.txt            # Quick reference checklist
+└── wget_*_historical.sh              # ESGF-generated download scripts
+```
+
+### ESGF Data Access
+
+ADAM includes comprehensive documentation for ESGF (Earth System Grid Federation):
+- **Active Nodes**: LLNL (US), ORNL (US), DKRZ (Germany), CEDA (UK), NCI (Australia)
+- **Cloud Access**: Google Cloud Platform, AWS S3
+- **Automated Testing**: Real-time node status and data availability checks
+- **Smart Retry**: Automatic fallback to alternative ensemble members
+
+See `cmip/ESGF_NODES.md` for complete ESGF documentation and `cmip/DOWNLOAD_INSTRUCTIONS.md` for step-by-step download guides.
+
 ## Output
 
 The pipeline generates:
@@ -168,6 +262,7 @@ The pipeline generates:
 - Model evaluation metrics and cross-validation results
 - Feature importance analysis and visualization plots
 - Comprehensive execution logs and model benchmarking
+- CMIP6 climate model visualizations and statistical summaries
 
 ## Development
 
